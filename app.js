@@ -498,6 +498,51 @@ function renderToday() {
   return html;
 }
 
+/* ---------- Calendar search ---------- */
+let calQuery = '';
+// Case- and accent-insensitive: "on tap" finds "Ôn tập", "dao ham" finds "đạo hàm".
+const fold = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+function searchTasks(q) {
+  const words = fold(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return S.tasks.filter(t => {
+    const tp = t.topic && TOPIC[t.topic];
+    const hay = fold([t.title, t.moduleId, tp && tp.short, tp && tp.name, tp && tp.code, TYPES[t.type]].join(' '));
+    return words.every(w => hay.includes(w));
+  }).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.ord - y.ord));
+}
+function renderCalResults(q) {
+  if (fold(q).trim().length < 2) return '<p class="small muted">Gõ ít nhất 2 ký tự. Bấm vào kết quả để nhảy tới tuần đó trong lịch.</p>';
+  const res = searchTasks(q);
+  if (!res.length) return `<p class="small muted">Không tìm thấy bài nào khớp "${esc(q)}".</p>`;
+  const today = todayStr();
+  const shown = res.slice(0, 40);
+  return `<p class="small muted">${res.length} kết quả${res.length > shown.length ? ` (hiện ${shown.length} đầu tiên, hãy gõ cụ thể hơn)` : ''}</p>
+    <div class="cal-res">${shown.map(t => {
+      const st = t.done ? '<span class="badge ok">Đã xong</span>' : t.date < today ? '<span class="badge bad">Trễ</span>' : t.date === today ? '<span class="badge warn">Hôm nay</span>' : '';
+      return `<div class="cal-hit"><a href="#" class="cal-hit-link" data-action="cal-jump" data-id="${t.id}"><span class="cal-date">${fmtDate(t.date)}/${t.date.slice(2, 4)}</span><span class="dot t-${t.type}"></span><span class="cal-name">${taskLabel(t)}</span></a>${st}<button class="btn small" data-action="enter-room" data-id="${t.id}">${t.done ? 'Xem lại' : ROOM_VERB[t.type]}</button></div>`;
+    }).join('')}</div>`;
+}
+// Show the task's week in the calendar, scroll to it and highlight it briefly.
+function jumpToTask(id) {
+  const t = S.tasks.find(x => x.id === id);
+  if (!t) return;
+  const today = todayStr();
+  if (!showAllWeeks && (t.date < mondayOf(today) || t.date > addDays(mondayOf(today), 7 * 5 + 6))) { showAllWeeks = true; render(); }
+  const chip = app.querySelector(`.chip[data-tid="${id}"]`);
+  if (!chip) return;
+  const wk = chip.closest('details');
+  if (wk) wk.open = true;
+  // Scroll after the layout settles (a full calendar re-render may have just happened).
+  setTimeout(() => {
+    const y = chip.getBoundingClientRect().top + window.scrollY - window.innerHeight / 2 + chip.offsetHeight / 2;
+    window.scrollTo(0, Math.max(0, y));
+    chip.classList.remove('flash');
+    void chip.offsetWidth;
+    chip.classList.add('flash');
+  }, 30);
+}
+
 function renderCalendar() {
   const st = S.settings;
   const today = todayStr();
@@ -506,7 +551,10 @@ function renderCalendar() {
   const curWeek = mondayOf(today);
   let html = `<h1>Lịch học</h1><p class="sub">Bấm vào tên một bài để mở ngay, dù bài đó xếp ở ngày nào; thời gian học được ghi vào ngày bạn thực sự học. Dời bài bằng ô ngày bên cạnh; đánh dấu ngày nghỉ thì lịch tự xếp lại.</p>
     <div class="actions" style="margin-bottom:12px"><button class="btn small" data-action="toggle-weeks">${showAllWeeks ? 'Chỉ hiện các tuần sắp tới' : 'Hiện tất cả các tuần'}</button>
-    <span class="legend">${Object.entries(TYPES).map(([k, v]) => `<span><i class="t-${k}"></i>${v}</span>`).join('')}</span></div>`;
+    <span class="legend">${Object.entries(TYPES).map(([k, v]) => `<span><i class="t-${k}"></i>${v}</span>`).join('')}</span></div>
+    <div class="card cal-search"><label class="f" for="cal-q">Tìm bài trong lịch</label>
+      <input type="search" id="cal-q" autocomplete="off" placeholder="Ví dụ: duration, FSA-03, Ethics, ôn tập, thi thử" value="${esc(calQuery)}">
+      <div id="cal-results">${renderCalResults(calQuery)}</div></div>`;
   for (let w = mondayOf(first); w <= lastTask; w = addDays(w, 7)) {
     const wEnd = addDays(w, 6);
     const isPast = wEnd < today;
@@ -522,11 +570,11 @@ function renderCalendar() {
       const off = st.offDays.includes(d);
       const cap = capacity(d);
       const isExam = d === st.examDate;
-      html += `<div class="day ${d === today ? 'today' : ''} ${off ? 'off' : ''}">
+      html += `<div class="day ${d === today ? 'today' : ''} ${off ? 'off' : ''}" data-day="${d}">
         <div class="day-head"><b>${fmtDate(d)}${isExam ? ' - NGÀY THI' : ''}</b>
           <span>${off ? 'Ngày nghỉ' : `${fmtM(sum(dts, t => t.minutes))} / ${fmtM(cap)}`}
           ${d >= today && !isExam ? ` · <a href="#" data-action="toggle-off" data-date="${d}">${off ? 'Bỏ nghỉ' : 'Nghỉ ngày này'}</a>` : ''}</span></div>
-        ${dts.map(t => `<div class="chip ${t.done ? 'done' : ''}"><span class="dot t-${t.type}"></span><a href="#" class="name chip-link" data-action="enter-room" data-id="${t.id}" title="Mở bài này">${taskLabel(t)}</a> ${matBadge(t.moduleId)}
+        ${dts.map(t => `<div class="chip ${t.done ? 'done' : ''}" data-tid="${t.id}"><span class="dot t-${t.type}"></span><a href="#" class="name chip-link" data-action="enter-room" data-id="${t.id}" title="Mở bài này">${taskLabel(t)}</a> ${matBadge(t.moduleId)}
           <span class="small muted">${fmtM(t.minutes)}${t.pinned ? ' · cố định' : ''}</span>
           ${t.done ? '' : `<input type="date" value="${t.date}" min="${today}" data-action="move" data-id="${t.id}" aria-label="Dời sang ngày">`}</div>`).join('')}
       </div>`;
@@ -840,6 +888,7 @@ app.addEventListener('click', e => {
   if (a === 'reflow') { toast(reflow(el.dataset.mode)); render(); }
   if (a === 'goto-settings') { view = 'settings'; render(); window.scrollTo(0, 0); }
   if (a === 'toggle-weeks') { showAllWeeks = !showAllWeeks; render(); }
+  if (a === 'cal-jump') jumpToTask(id);
   if (a === 'toggle-off') {
     const d = el.dataset.date;
     const st = S.settings;
@@ -884,6 +933,13 @@ app.addEventListener('submit', e => {
   const M = metrics();
   toast(M.streak > 1 ? `Đã lưu. Chuỗi ${M.streak} ngày liên tục - tiếp tục nhé!` : 'Đã lưu check-in.');
   render();
+});
+
+app.addEventListener('input', e => {
+  if (e.target.id !== 'cal-q') return;
+  calQuery = e.target.value;
+  const box = document.getElementById('cal-results');
+  if (box) box.innerHTML = renderCalResults(calQuery);
 });
 
 app.addEventListener('change', e => {
