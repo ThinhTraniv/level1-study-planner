@@ -139,7 +139,7 @@ window.renderRoom = function renderRoom() {
   const title = t.moduleId ? `${esc(t.moduleId)} - ${esc(t.title)}` : esc(t.title);
   const head = `<div class="room-head card">
     <div class="rh-left"><button class="btn small" data-r="leave">← Quay lại</button>
-      <div><div class="rh-title">${title}${t.parts > 1 ? ` <span class="muted">(phần ${t.part}/${t.parts})</span>` : ''}</div>${stepper}</div></div>
+      <div>${t.topic && TOPIC[t.topic] ? `<div class="rh-topic">${esc(TOPIC[t.topic].name)}</div>` : ''}<div class="rh-title">${title}${t.parts > 1 ? ` <span class="muted">(phần ${t.part}/${t.parts})</span>` : ''}</div>${stepper}</div></div>
     <div class="rh-right"><div class="clock ${ss.pauseStart ? 'paused' : ''} ${isMock && !ss.graded && clockMs < 600000 ? 'late' : ''}"><span id="room-clock">${mmss(clockMs)}</span><small>${isMock && !ss.graded ? ' còn lại' : ` / ${t.minutes}:00`}</small></div>
       <button class="btn small" data-r="${ss.pauseStart ? 'resume' : 'pause'}">${ss.pauseStart ? 'Tiếp tục' : 'Tạm dừng'}</button>
       <button class="btn small primary" data-r="end">${ss.revisit ? 'Kết thúc xem lại' : 'Kết thúc buổi học'}</button></div>
@@ -353,14 +353,14 @@ function renderEnd(t, L, ss, ms) {
   const qs = roomQuestions(t, ss);
   const correct = qs.filter((q, i) => ss.answers[i] === q.answer).length;
   if (ss.revisit) {
-    return `<div class="card end"><h1>Kết thúc xem lại</h1><p class="sub">${esc(t.title)}</p>
+    return `<div class="card end"><h1>Kết thúc xem lại</h1><p class="sub">${t.topic && TOPIC[t.topic] ? `${esc(TOPIC[t.topic].name)} · ` : ''}${esc(t.title)}</p>
       <form id="end-form" class="done-form">
         <label class="f">Thời gian xem lại (phút) - ghi vào hôm nay ${fmtDateY(todayStr())}<input type="number" name="actual" min="0" value="${mins}"></label>
         <div class="actions"><button class="btn primary" type="submit">Lưu và rời phòng học</button><button class="btn" type="button" data-r="back">Quay lại</button></div>
       </form></div>`;
   }
   const partial = t.type === 'learn' && mins < t.minutes * 0.7;
-  return `<div class="card end"><h1>Kết thúc buổi học</h1><p class="sub">${esc(t.title)}${t.date !== todayStr() ? ` · lịch ngày ${fmtDateY(t.date)}, ghi nhận vào hôm nay ${fmtDateY(todayStr())}` : ''}</p>
+  return `<div class="card end"><h1>Kết thúc buổi học</h1><p class="sub">${t.topic && TOPIC[t.topic] ? `${esc(TOPIC[t.topic].name)} · ` : ''}${esc(t.title)}${t.date !== todayStr() ? ` · lịch ngày ${fmtDateY(t.date)}, ghi nhận vào hôm nay ${fmtDateY(todayStr())}` : ''}</p>
     <div class="grid stats" style="margin-bottom:14px">
       <div class="stat"><div class="v">${mins}'</div><div class="l">thời gian học (kế hoạch ${t.minutes}')</div></div>
       <div class="stat ${ss.graded ? (correct / Math.max(1, qs.length) >= 0.7 ? 'ok' : 'warn') : ''}"><div class="v">${ss.graded ? `${correct}/${qs.length}` : '-'}</div><div class="l">câu đúng${ss.graded ? '' : ' (chưa nộp bài)'}</div></div>

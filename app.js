@@ -385,7 +385,9 @@ function matBadge(moduleId) {
 const ROOM_VERB = { learn: 'Vào học', review: 'Vào ôn', mock: 'Vào thi', mockreview: 'Chữa đề' };
 function taskLabel(t) {
   const part = t.parts > 1 ? ` (phần ${t.part}/${t.parts})` : '';
-  return `${esc(t.title)}${part}`;
+  // Learn tasks show their subject in front of the module name; review titles already name the subject.
+  const tag = t.type === 'learn' && t.topic && TOPIC[t.topic] ? `<span class="topic-tag">${esc(TOPIC[t.topic].short)}</span> ` : '';
+  return `${tag}${esc(t.title)}${part}`;
 }
 function taskMeta(t) {
   const bits = [`<span class="c-${t.type}">${TYPES[t.type]}</span>`];
