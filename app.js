@@ -624,28 +624,85 @@ function renderProgress() {
   return html;
 }
 
+// Chương trình tab: a study map. Each module shows whether it was learned, time spent and the latest practice score.
+let synFilter = 'all';
+let synMat = false;
+const synOpen = new Set();
+let synInit = false;
+const SYN_ST = {
+  none: { label: 'Chưa học', cls: '' }, learned: { label: 'Đã học', cls: '' },
+  good: { label: 'Đã vững', cls: 'ok' }, mid: { label: 'Cần ôn', cls: 'warn' }, weak: { label: 'Đang yếu', cls: 'bad' },
+};
+function moduleInfo(m) {
+  const lt = S.tasks.filter(x => x.key === `L:${m.id}`);
+  const ids = new Set(S.tasks.filter(x => x.moduleId === m.id).map(x => x.id));
+  const done = lt.filter(x => x.done);
+  const minutes = sum(done, x => Number(x.actualMin != null ? x.actualMin : x.minutes) || 0)
+    + sum((S.log || []).filter(e => e.kind === 'revisit' && ids.has(e.taskId)), e => Number(e.minutes) || 0);
+  const qs = (S.qstats || {})[m.id];
+  // Before per-module stats existed, the score typed in when finishing the lesson is the only record.
+  const typed = done.filter(x => x.qTotal).sort((x, y) => (x.doneAt < y.doneAt ? -1 : 1)).pop();
+  const last = qs ? qs.last : typed ? { c: Number(typed.qCorrect) || 0, n: Number(typed.qTotal) } : null;
+  const tot = qs ? { c: qs.c, n: qs.n } : last;
+  let st = done.length ? 'learned' : 'none';
+  if (last && last.n) { const r = last.c / last.n; st = r >= 0.7 ? 'good' : r >= 0.6 ? 'mid' : 'weak'; }
+  const next = lt.find(x => !x.done);
+  const task = done.length ? done[done.length - 1] : next;
+  return { st, minutes, last, tot, task, learned: done.length > 0 || !!qs };
+}
+function synMatch(st) {
+  return synFilter === 'all' || (synFilter === 'none' && st === 'none') || (synFilter === 'weak' && (st === 'weak' || st === 'mid')) || (synFilter === 'good' && st === 'good');
+}
 function renderSyllabus() {
-  let html = `<h1>Chương trình Level I 2027</h1><p class="sub">${SY.topics.length} topic, ${Object.keys(MODULE).length} module theo Topic Outline của CFA Institute. Ghi lại tài liệu bạn dùng cho từng module.</p>
-    <div class="actions" style="margin-bottom:14px"><label class="btn">Nhập file tài liệu (.json)<input type="file" accept=".json,application/json" data-action="import-mat" hidden></label>
-    <span class="small muted">Ghi lại tài liệu riêng của bạn cho từng module ngay bên dưới.</span></div>`;
+  if (!synInit) {
+    // First visit: open the subject currently being studied.
+    synInit = true;
+    const nx = S.tasks.filter(x => x.type === 'learn' && !x.done).sort((x, y) => (x.date < y.date ? -1 : 1))[0];
+    synOpen.add(nx ? nx.topic : S.settings.topicOrder[0]);
+  }
+  const info = {};
+  Object.values(MODULE).forEach(m => { info[m.id] = moduleInfo(m); });
+  const all = Object.values(info);
+  const cnt = { all: all.length, none: all.filter(x => x.st === 'none').length, weak: all.filter(x => x.st === 'weak' || x.st === 'mid').length, good: all.filter(x => x.st === 'good').length };
+  const FL = [['all', 'Tất cả'], ['none', 'Chưa học'], ['weak', 'Cần ôn và đang yếu'], ['good', 'Đã vững']];
+  let html = `<h1>Chương trình Level I 2027</h1><p class="sub">${SY.topics.length} môn, ${all.length} module. Xem module nào đã học, đang yếu hay đã vững rồi vào học hoặc ôn lại ngay.</p>
+    <div class="actions syn-bar">${FL.map(([k, l]) => `<button class="btn small ${synFilter === k ? 'on' : ''}" data-action="syn-filter" data-k="${k}">${l} (${cnt[k]})</button>`).join('')}
+    <span style="flex:1"></span><button class="btn small ${synMat ? 'on' : ''}" data-action="syn-mat">Tài liệu riêng</button></div>`;
   for (const code of S.settings.topicOrder) {
     const t = TOPIC[code];
-    const counts = { co: 0, 'mot-phan': 0, chua: 0, none: 0 };
-    t.modules.forEach(m => { counts[(S.materials[m.id] || {}).status || 'none']++; });
-    html += `<div class="card"><div class="actions" style="justify-content:space-between"><h2 style="margin:0">${esc(t.name)} <span class="muted small">${t.weightMin}-${t.weightMax}%</span></h2>
-      <span class="small muted">${counts.co} có · ${counts['mot-phan']} một phần · ${counts.chua} chưa có${counts.none ? ` · ${counts.none} chưa ghi` : ''}</span></div>`;
-    for (const m of t.modules) {
-      const mat = S.materials[m.id] || { status: '', note: '' };
-      const lt = S.tasks.filter(x => x.key === `L:${m.id}`);
-      const lp = sum(lt.filter(x => x.done), x => x.minutes) / Math.max(1, sum(lt, x => x.minutes));
-      html += `<div class="mod"><div class="mod-head"><span class="small muted">${m.id}</span><span class="name">${esc(m.name)}</span>
-        <span class="small muted">${Math.round(lp * 100)}% · ${fmtM(sum(lt, x => x.minutes))}</span>
-        <select data-action="mat-status" data-id="${m.id}"><option value="">- Tài liệu -</option>${Object.entries(MAT).map(([k, v]) => `<option value="${k}" ${mat.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
-        <input type="text" placeholder="Tài liệu dùng cho module này (file, trang, link...)" value="${esc(mat.note)}" data-action="mat-note" data-id="${m.id}">
-        ${m.los.length ? `<details><summary>${m.los.length} LOS</summary><ul>${m.los.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : `<span class="small muted">${m.losCount || 0} LOS</span>`}</div>`;
+    const mods = t.modules.filter(m => synMatch(info[m.id].st));
+    if (!mods.length && synFilter !== 'all') continue;
+    const tc = t.modules.map(m => info[m.id]);
+    const learned = tc.filter(x => x.learned).length;
+    const c = sum(tc, x => (x.tot ? x.tot.c : 0)), n = sum(tc, x => (x.tot ? x.tot.n : 0));
+    const scored = t.modules.filter(m => info[m.id].last && info[m.id].last.n);
+    const worst = scored.sort((x, y) => info[x.id].last.c / info[x.id].last.n - info[y.id].last.c / info[y.id].last.n)[0];
+    const open = synOpen.has(code) || synFilter !== 'all';
+    const wst = worst ? SYN_ST[info[worst.id].st] : null;
+    html += `<div class="card syn-topic"><button class="syn-head" data-action="syn-topic" data-k="${code}" aria-expanded="${open}">
+      <span class="syn-title">${esc(t.name)} <span class="muted small">- trọng số ${t.weightMin}-${t.weightMax}%</span></span><span class="muted">${open ? '▴' : '▾'}</span></button>
+      <div class="syn-stats small"><span><span class="muted">Đã học</span> ${learned}/${t.modules.length} module</span>
+      ${n ? `<span><span class="muted">Luyện tập đúng</span> ${Math.round((c / n) * 100)}% số câu</span>` : ''}
+      ${worst && info[worst.id].st !== 'good' ? `<span><span class="muted">Cần ôn nhất</span> <span class="txt-${wst.cls}">${worst.id}</span></span>` : ''}
+      <span><span class="muted">Thời gian</span> ${fmtM(sum(tc, x => x.minutes))}</span></div>
+      <div class="syn-bar-track"><div style="width:${Math.round((learned / t.modules.length) * 100)}%"></div></div>`;
+    if (open) {
+      html += `<div class="syn-rows"><div class="syn-row syn-th small muted"><span>Module</span><span>Tên</span><span>Trạng thái</span><span>Đã học</span><span>Luyện tập gần nhất</span><span></span></div>`;
+      for (const m of mods) {
+        const x = info[m.id], s = SYN_ST[x.st];
+        const mat = S.materials[m.id] || { status: '', note: '' };
+        const btn = x.task ? `<button class="btn small" data-action="enter-room" data-id="${x.task.id}">${x.task.done ? 'Ôn lại' : 'Vào học'}</button>` : '';
+        html += `<div class="syn-row"><span class="small muted">${m.id}</span><span class="syn-name">${esc(m.name)}</span>
+          <span><span class="badge ${s.cls}">${s.label}</span></span><span class="small">${x.minutes ? fmtM(x.minutes) : '<span class="muted">-</span>'}</span>
+          <span class="small syn-res">${x.last && x.last.n ? `<span class="txt-${s.cls}">${x.last.c}/${x.last.n} câu đúng</span>` : '<span class="muted">Chưa làm</span>'}</span><span>${btn}</span></div>`;
+        if (synMat) html += `<div class="syn-mat"><select data-action="mat-status" data-id="${m.id}"><option value="">- Tài liệu -</option>${Object.entries(MAT).map(([k, v]) => `<option value="${k}" ${mat.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
+          <input type="text" placeholder="Tài liệu riêng cho module này (sách, trang, link...)" value="${esc(mat.note)}" data-action="mat-note" data-id="${m.id}"></div>`;
+      }
+      html += '</div>';
     }
     html += '</div>';
   }
+  html += '<p class="small muted">Đã vững: từ 70% số câu đúng ở lần luyện tập gần nhất (7/10). Cần ôn: 60-70%. Đang yếu: dưới 60%.</p>';
   return html;
 }
 
@@ -789,6 +846,7 @@ function bindSettings(first) {
       buildBaseline(); save();
       toast(msg);
     }
+    if (isFirst) importDefaultMaterialsHint();
     view = 'today'; render();
     };
     if (mode === 'generate' && !first) askConfirm('Tạo lại kế hoạch? Các việc đã hoàn thành được giữ lại, các việc còn lại sẽ được xếp mới.', 'Tạo lại').then(ok => { if (ok) apply(); });
@@ -796,6 +854,9 @@ function bindSettings(first) {
   });
 }
 
+function importDefaultMaterialsHint() {
+  setTimeout(() => toast('Mẹo: vào tab Chương trình để nhập file tài liệu của bạn.'), 3400);
+}
 
 /* ---------- In-page dialogs (browser confirm() is blocked in some viewers) ---------- */
 function openModal(html) {
@@ -889,6 +950,9 @@ app.addEventListener('click', e => {
   if (a === 'goto-settings') { view = 'settings'; render(); window.scrollTo(0, 0); }
   if (a === 'toggle-weeks') { showAllWeeks = !showAllWeeks; render(); }
   if (a === 'cal-jump') jumpToTask(id);
+  if (a === 'syn-filter') { synFilter = el.dataset.k; render(); }
+  if (a === 'syn-mat') { synMat = !synMat; render(); }
+  if (a === 'syn-topic') { const k = el.dataset.k; if (synOpen.has(k)) synOpen.delete(k); else synOpen.add(k); render(); }
   if (a === 'toggle-off') {
     const d = el.dataset.date;
     const st = S.settings;
@@ -908,7 +972,7 @@ app.addEventListener('click', e => {
     const blob = new Blob([backupText], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `study-planner-saoluu-${todayStr()}.json`;
+    link.download = `cfa-planner-saoluu-${todayStr()}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     showBackup(backupText);
@@ -962,7 +1026,7 @@ app.addEventListener('change', e => {
       let data;
       try { data = JSON.parse(txt); } catch (err) { toast('File không đúng định dạng JSON.'); return; }
       if (a === 'import-mat') {
-        if (data.kind !== 'cfa-planner-materials' || !data.materials) { toast('Đây không phải file tài liệu của Study Planner.'); return; }
+        if (data.kind !== 'cfa-planner-materials' || !data.materials) { toast('Đây không phải file tài liệu của CFA Planner.'); return; }
         let n = 0;
         Object.entries(data.materials).forEach(([id, v]) => { if (MODULE[id] && v && MAT[v.status]) { S.materials[id] = { status: v.status, note: String(v.note || '') }; n++; } });
         save(); toast(`Đã nhập tài liệu cho ${n} module.`); render();

@@ -155,7 +155,7 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 
 .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
-.badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; padding: 1px 8px; border-radius: 999px; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 
 form.done-form { margin-top: 10px; padding: 12px; background: var(--surface-2); border-radius: 8px; display: grid; gap: 10px; }
@@ -252,3 +252,27 @@ td.num, th.num { white-space: nowrap; }
 .chip.flash { animation: chipflash 2.4s ease-out; border-radius: 6px; }
 @keyframes chipflash { 0%, 30% { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); } 100% { background: transparent; box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .chip.flash { animation: none; background: var(--accent-soft); } }
+
+/* Chương trình tab (study map) */
+.syn-bar { margin-bottom: 14px; }
+.btn.on { background: var(--accent-soft, var(--surface-2)); border-color: var(--accent); color: var(--accent); }
+.syn-head { all: unset; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; width: 100%; }
+.syn-title { font-weight: 600; font-size: 16px; }
+.syn-stats { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+.syn-bar-track { height: 6px; background: var(--surface-2); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.syn-bar-track > div { height: 100%; background: var(--accent); }
+.syn-rows { margin-top: 10px; }
+.syn-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) 92px 62px 132px 76px; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--border); }
+.syn-th { padding: 4px 0; }
+.syn-res, .syn-row .badge { white-space: nowrap; }
+.syn-mat { display: flex; gap: 8px; padding: 0 0 8px 66px; flex-wrap: wrap; }
+.syn-mat input { flex: 1; min-width: 200px; }
+.txt-ok { color: var(--ok); } .txt-warn { color: var(--warn); } .txt-bad { color: var(--bad); }
+@media (max-width: 640px) {
+  .syn-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+  .syn-th { display: none; }
+  .syn-row > :nth-child(4) { display: none; }
+  .syn-row > :nth-child(5) { grid-column: 1 / 3; }
+  .syn-row > :nth-child(6) { justify-self: end; }
+  .syn-mat { padding-left: 0; }
+}

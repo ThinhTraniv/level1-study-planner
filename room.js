@@ -280,6 +280,21 @@ function showPage(delta, absolute) {
 function roomQuestions(t, ss) {
   return (ss.qset || []).map(qOf).filter(Boolean);
 }
+// Each graded attempt is stored per module (questions in review/mock sets carry their module in q.src);
+// the Chương trình tab shows the latest attempt and the running total.
+function recordPractice(qs, answers) {
+  S.qstats = S.qstats || {};
+  const by = {};
+  qs.forEach((q, i) => {
+    by[q.src] = by[q.src] || { c: 0, n: 0 };
+    by[q.src].n++;
+    if (answers[i] === q.answer) by[q.src].c++;
+  });
+  Object.entries(by).forEach(([m, v]) => {
+    const x = S.qstats[m] || { c: 0, n: 0, tries: 0 };
+    S.qstats[m] = { c: x.c + v.c, n: x.n + v.n, tries: x.tries + 1, last: { c: v.c, n: v.n, date: todayStr() } };
+  });
+}
 function topicScores(qs, answers) {
   const by = {};
   qs.forEach((q, i) => {
@@ -540,6 +555,7 @@ app.addEventListener('click', e => {
       return;
     }
     ss.graded = true;
+    recordPractice(roomQuestions(t, ss), ss.answers);
     if (t.type === 'mock') {
       S.mockResults = S.mockResults || {};
       S.mockResults[mockNo(t)] = S.mockResults[mockNo(t)] || {};
