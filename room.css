@@ -223,3 +223,19 @@ details.los ul { color: var(--muted); }
 .topic-tag { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; vertical-align: 1px; text-decoration: none; }
 .chip.done .topic-tag { opacity: 0.7; }
 .rh-topic { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+
+/* Practice: verdicts, result strip, language switch */
+.res-tag { display: inline-block; font-weight: 700; font-size: 13px; padding: 1px 8px; border-radius: 999px; margin-right: 8px; vertical-align: 1px; }
+.res-tag.ok { background: var(--ok-soft); color: var(--ok); }
+.res-tag.bad { background: var(--bad-soft); color: var(--bad); }
+.txt-ok { color: var(--ok); }
+.txt-bad { color: var(--bad); }
+.q.right { border-left: 4px solid var(--ok); }
+.q.wrong { border-left: 4px solid var(--bad); }
+.choice.picked-wrong { background: var(--bad-soft); }
+.res-strip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.res-strip .qcell { width: 34px; }
+.practice-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.lang-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+.lang-switch button { border: 0; background: var(--surface); color: var(--muted); padding: 4px 12px; font-weight: 600; cursor: pointer; font-size: 13px; }
+.lang-switch button.on { background: var(--accent); color: #fff; }

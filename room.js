@@ -9,6 +9,11 @@ const PHASES = [
   { key: 'wrap', label: 'Tổng kết', pct: 5 },
 ];
 const REVIEW_SIZE = 30;
+const PRACTICE_SIZE = 10; // questions drawn per attempt from a module's bank (bank may grow beyond 10)
+// Question language: English by default (the exam is in English); remembered per browser.
+let LANG = 'en';
+try { LANG = localStorage.getItem('cfaLang') === 'vi' ? 'vi' : 'en'; } catch (e) { /* storage unavailable */ }
+function setLang(l) { LANG = l; try { localStorage.setItem('cfaLang', l); } catch (e) { /* storage unavailable */ } }
 const MOCK_SIZE = 90;
 // Exam sessions follow the 2027 Level I layout (CFA Institute topic outline page).
 const MOCK_SESSIONS = { 1: ['ET', 'QM', 'EC', 'FSA', 'CF'], 2: ['EQ', 'FI', 'DE', 'AI', 'PC'] };
@@ -26,7 +31,7 @@ const mockSession = t => Number(String(t.key).split(':')[2]);
 function session(t) {
   if (!S.sessions[t.id]) {
     const base = { start: Date.now(), pausedTotal: 0, pauseStart: null, side: 'notes', sec: 0, seen: [0], page: 0, answers: {}, graded: false, phase: 'warmup', revisit: !!t.done };
-    if (t.type === 'learn') Object.assign(base, { tab: 'lesson', mod: t.moduleId });
+    if (t.type === 'learn') Object.assign(base, { tab: 'lesson', mod: t.moduleId, qset: buildPracticeSet(t.moduleId) });
     if (t.type === 'review') Object.assign(base, { tab: 'practice', mod: topicModules(t.topic)[0], qset: buildReviewSet(t.topic) });
     if (t.type === 'mock') Object.assign(base, { tab: 'practice', qset: buildMockSet(mockSession(t)), qi: 0 });
     if (t.type === 'mockreview') Object.assign(base, { tab: 'results', mod: null, onlyWrong: true });
@@ -34,6 +39,7 @@ function session(t) {
   }
   const ss = S.sessions[t.id];
   if (t.type === 'learn' && !ss.mod) ss.mod = t.moduleId; // sessions saved before review/mock rooms existed
+  if (t.type === 'learn' && !ss.qset && lessonById(t.moduleId)) ss.qset = lessonById(t.moduleId).practice.map((_, i) => ({ m: t.moduleId, i })); // saved before shuffling existed: keep original order
   return ss;
 }
 function elapsedMs(ss) {
@@ -53,15 +59,35 @@ const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad
 
 /* ---------- Question pools ---------- */
 const topicModules = code => (TOPIC[code] ? TOPIC[code].modules.map(m => m.id).filter(id => lessonById(id)) : []);
-const qOf = ref => { const L = lessonById(ref.m); return L && L.practice[ref.i] ? { ...L.practice[ref.i], src: ref.m } : null; };
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+// A question reference: module, index in its bank, and p = display order of the choices (p[k] = original choice shown at position k).
+function makeRef(m, i) {
+  const q = lessonById(m).practice[i];
+  const p = q.choices.map((_, k) => k);
+  return { m, i, p: q.keepOrder ? p : shuffle(p) };
+}
+// Text in the chosen language (falls back to Vietnamese where no English version exists); answer always from the bank.
+function qOf(ref) {
+  const L = lessonById(ref.m);
+  const base = L && L.practice[ref.i];
+  if (!base) return null;
+  const en = LANG === 'en' && window.PRACTICE_EN && window.PRACTICE_EN[ref.m] && window.PRACTICE_EN[ref.m][ref.i];
+  const src = en || base;
+  return { q: src.q, choices: src.choices, explain: src.explain, answer: base.answer, src: ref.m, p: ref.p || base.choices.map((_, k) => k), lang: en ? 'en' : 'vi' };
+}
+// A fresh attempt for a module: random questions from its bank, random order, shuffled choices.
+function buildPracticeSet(m) {
+  const L = lessonById(m);
+  if (!L) return [];
+  return shuffle(L.practice.map((_, i) => i)).slice(0, PRACTICE_SIZE).map(i => makeRef(m, i));
+}
 
 // Review: round-robin over the topic's modules so every module is represented.
 function buildReviewSet(code) {
   const lists = topicModules(code).map(id => shuffle(lessonById(id).practice.map((_, i) => ({ m: id, i }))));
   const out = [];
   while (out.length < REVIEW_SIZE && lists.some(l => l.length)) lists.forEach(l => { if (l.length && out.length < REVIEW_SIZE) out.push(l.shift()); });
-  return shuffle(out);
+  return shuffle(out).map(r => makeRef(r.m, r.i));
 }
 // Mock: 90 questions split across the session's topics by 2027 weight midpoints; unused questions first.
 function buildMockSet(sessionNo) {
@@ -77,7 +103,7 @@ function buildMockSet(sessionNo) {
   codes.forEach((c, k) => {
     const pool = shuffle(topicModules(c).flatMap(id => lessonById(id).practice.map((_, i) => ({ m: id, i }))));
     pool.sort((a, b) => used.has(`${a.m}:${a.i}`) - used.has(`${b.m}:${b.i}`));
-    out.push(...pool.slice(0, n[k]));
+    out.push(...pool.slice(0, n[k]).map(r => makeRef(r.m, r.i)));
   });
   return out;
 }
@@ -252,7 +278,6 @@ function showPage(delta, absolute) {
 
 // Questions shown in this room: the module's own set for learn, the stored set for review/mock.
 function roomQuestions(t, ss) {
-  if (t.type === 'learn') { const L = lessonById(t.moduleId); return L ? L.practice.map(q => ({ ...q, src: t.moduleId })) : []; }
   return (ss.qset || []).map(qOf).filter(Boolean);
 }
 function topicScores(qs, answers) {
@@ -273,22 +298,32 @@ function scoreTable(by) {
 }
 
 function questionHtml(q, i, a, graded, opts = {}) {
-  return `<div class="q ${graded ? (a === q.answer ? 'right' : 'wrong') : ''}" id="q-${i}"><div class="qh">Câu ${i + 1}. ${esc(q.q)}${opts.showSrc ? ` <span class="badge">${esc(q.src)}</span>` : ''}</div>
-    ${q.choices.map((c, j) => `<label class="choice ${graded && j === q.answer ? 'ans' : ''}"><input type="radio" name="q${i}" value="${j}" ${a === j ? 'checked' : ''} ${graded || opts.readonly ? 'disabled' : ''} data-r="answer" data-i="${i}"> ${'ABC'[j]}. ${esc(c)}</label>`).join('')}
-    ${graded ? `<div class="explain">${a === q.answer ? 'Đúng.' : `${a == null ? 'Chưa trả lời' : 'Sai'} - đáp án đúng là ${'ABC'[q.answer]}.`} ${esc(q.explain)}</div>
+  const right = a === q.answer;
+  const verdict = graded ? (right ? '<span class="res-tag ok">✓ Đúng</span>' : `<span class="res-tag bad">✗ ${a == null ? 'Sai (chưa trả lời)' : 'Sai'}</span>`) : '';
+  const posOfAnswer = q.p.indexOf(q.answer);
+  return `<div class="q ${graded ? (right ? 'right' : 'wrong') : ''}" id="q-${i}"><div class="qh">${verdict}${q.lang === 'en' ? 'Question' : 'Câu'} ${i + 1}. ${esc(q.q)}${opts.showSrc ? ` <span class="badge">${esc(q.src)}</span>` : ''}${LANG === 'en' && q.lang !== 'en' ? ' <span class="badge">chưa có bản tiếng Anh</span>' : ''}</div>
+    ${q.p.map((j, k) => `<label class="choice ${graded && j === q.answer ? 'ans' : ''} ${graded && j === a && !right ? 'picked-wrong' : ''}"><input type="radio" name="q${i}" value="${j}" ${a === j ? 'checked' : ''} ${graded || opts.readonly ? 'disabled' : ''} data-r="answer" data-i="${i}"> ${'ABC'[k]}. ${esc(q.choices[j])}</label>`).join('')}
+    ${graded ? `<div class="explain">${right ? '<b class="txt-ok">Đúng.</b>' : `<b class="txt-bad">Sai</b> - đáp án đúng là <b>${'ABC'[posOfAnswer]}</b>.`} ${esc(q.explain)}</div>
       ${opts.openLesson ? `<div class="actions" style="margin-top:6px"><button class="btn small" data-r="open-mod" data-m="${esc(q.src)}">Mở bài giảng ${esc(q.src)}</button></div>` : ''}` : ''}</div>`;
 }
+// One coloured cell per question after grading; click to jump to it.
+function resultStrip(qs, answers) {
+  return `<div class="res-strip">${qs.map((q, i) => `<button class="qcell ${answers[i] === q.answer ? 'ok' : 'bad'}" data-r="goto" data-i="${i}" title="Câu ${i + 1}">${i + 1}</button>`).join('')}</div>`;
+}
+const langSwitch = () => `<div class="lang-switch" role="group" aria-label="Ngôn ngữ câu hỏi"><button class="${LANG === 'en' ? 'on' : ''}" data-r="lang" data-k="en">EN</button><button class="${LANG === 'vi' ? 'on' : ''}" data-r="lang" data-k="vi">VI</button></div>`;
 
 function renderPractice(t, ss) {
   const qs = roomQuestions(t, ss);
   if (!qs.length) return '<div class="empty">Chưa có câu hỏi cho buổi này.</div>';
   const correct = qs.filter((q, i) => ss.answers[i] === q.answer).length;
   const isMock = t.type === 'mock';
-  let h = ss.graded
-    ? `<div class="banner ${correct / qs.length >= 0.7 ? 'ok' : 'warn'}"><b>Kết quả: ${correct}/${qs.length} câu đúng (${Math.round((correct / qs.length) * 100)}%).</b> ${correct / qs.length >= 0.7 ? 'Đạt mức an toàn 70%.' : 'Dưới 70% - xem kỹ lời giải và học lại phần liên quan.'}
-        ${isMock ? '' : '<div class="actions"><button class="btn small" data-r="retry">Làm lại</button>' + (t.type === 'review' ? ' <button class="btn small" data-r="newset">Bộ câu mới</button>' : '') + '</div>'}</div>
-        ${t.type !== 'learn' ? scoreTable(topicScores(qs, ss.answers)) : ''}`
-    : `<p class="small muted">${qs.length} câu, mỗi câu 3 lựa chọn như đề thi thật. Mục tiêu khoảng 90 giây mỗi câu.</p>`;
+  let h = `<div class="practice-bar">${langSwitch()}<span class="small muted">${ss.graded ? '' : `${qs.length} câu, mỗi câu 3 lựa chọn như đề thi thật. Mục tiêu khoảng 90 giây mỗi câu.`}</span></div>`;
+  if (ss.graded) {
+    h += `<div class="banner ${correct / qs.length >= 0.7 ? 'ok' : 'warn'}"><b>Kết quả: ${correct}/${qs.length} câu đúng (${Math.round((correct / qs.length) * 100)}%).</b> ${correct / qs.length >= 0.7 ? 'Đạt mức an toàn 70%.' : 'Dưới 70% - xem kỹ lời giải và học lại phần liên quan.'}
+        ${resultStrip(qs, ss.answers)}
+        ${isMock ? '' : `<div class="actions"><button class="btn small" data-r="retry">Làm lại (xáo câu và đáp án)</button>${t.type === 'review' ? ' <button class="btn small" data-r="newset">Bộ câu mới</button>' : ''}</div>`}</div>
+        ${t.type !== 'learn' ? scoreTable(topicScores(qs, ss.answers)) : ''}`;
+  }
   h += qs.map((q, i) => questionHtml(q, i, ss.answers[i], ss.graded, { showSrc: t.type !== 'learn' && ss.graded, openLesson: t.type === 'review' })).join('');
   if (!ss.graded) h += `<div class="actions pager"><button class="btn primary" data-r="grade">Nộp bài (${Object.keys(ss.answers).length}/${qs.length} đã chọn)</button></div>`;
   return h;
@@ -318,7 +353,7 @@ function renderMockResults(t, ss) {
     h += `<h3>Session ${sn}: ${correct}/${qs.length} câu đúng (${Math.round((correct / qs.length) * 100)}%)</h3>${scoreTable(topicScores(qs, r.answers))}`;
     h += qs.map((q, i) => (ss.onlyWrong && r.answers[i] === q.answer ? '' : questionHtml(q, i, r.answers[i], true, { showSrc: true, openLesson: true }))).join('');
   });
-  return `<div class="actions" style="margin-bottom:10px"><label class="row small"><input type="checkbox" data-r="onlywrong" ${ss.onlyWrong ? 'checked' : ''}> Chỉ hiện câu sai</label></div>${h}`;
+  return `<div class="practice-bar">${langSwitch()}<label class="row small"><input type="checkbox" data-r="onlywrong" ${ss.onlyWrong ? 'checked' : ''}> Chỉ hiện câu sai</label></div>${h}`;
 }
 
 function renderTerms(L) {
@@ -512,8 +547,13 @@ app.addEventListener('click', e => {
       ss.side = 'nav';
     }
   }
-  if (r === 'retry') { ss.answers = {}; ss.graded = false; }
+  if (r === 'retry') {
+    // New attempt: same module (or same review set), new question order and new choice order.
+    ss.qset = t.type === 'learn' ? buildPracticeSet(t.moduleId) : shuffle((ss.qset || []).map(x => makeRef(x.m, x.i)));
+    ss.answers = {}; ss.graded = false; window.scrollTo(0, 0);
+  }
   if (r === 'newset') { ss.qset = buildReviewSet(t.topic); ss.answers = {}; ss.graded = false; }
+  if (r === 'lang') setLang(b.dataset.k);
   if (r === 'ask') {
     const q = (document.getElementById('ask-q').value || '').trim();
     if (!q) { toast('Hãy gõ câu hỏi trước.'); return; }
