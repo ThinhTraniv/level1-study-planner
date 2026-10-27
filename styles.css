@@ -276,3 +276,16 @@ td.num, th.num { white-space: nowrap; }
   .syn-row > :nth-child(6) { justify-self: end; }
   .syn-mat { padding-left: 0; }
 }
+
+/* Glossary tab */
+.gl-list { padding: 4px 14px; }
+.gl-item { padding: 10px 0; border-bottom: 1px solid var(--border, var(--surface-2)); }
+.gl-item:last-child { border-bottom: 0; }
+.gl-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.gl-vi { overflow-wrap: anywhere; }
+.gl-mods { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.gl-mod { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft, var(--surface-2)); color: var(--accent); cursor: pointer; }
+.gl-mod:hover { text-decoration: underline; }
+.gl-mod.off { border-color: var(--muted); color: var(--muted); cursor: default; }
+.gl-group { margin: 14px 0 2px; padding-top: 6px; font-weight: 600; font-size: 14px; color: var(--accent); }
+#gl-q { width: 100%; padding: 8px 10px; font-size: 15px; }

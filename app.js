@@ -408,6 +408,7 @@ function render() {
   if (view === 'calendar') app.innerHTML = renderCalendar();
   if (view === 'progress') app.innerHTML = renderProgress();
   if (view === 'syllabus') app.innerHTML = renderSyllabus();
+  if (view === 'glossary') app.innerHTML = renderGlossary();
   if (view === 'settings') { app.innerHTML = renderSettings(false); bindSettings(false); }
 }
 
@@ -653,6 +654,89 @@ function moduleInfo(m) {
 function synMatch(st) {
   return synFilter === 'all' || (synFilter === 'none' && st === 'none') || (synFilter === 'weak' && (st === 'weak' || st === 'mid')) || (synFilter === 'good' && st === 'good');
 }
+/* ---------- Glossary (all lesson terms in one place) ---------- */
+let glQuery = '', glTopic = 'all', glSort = 'en', glLimit = 100, glIndex = null;
+const GL_PAGE = 100;
+const GL_SORTS = [['en', 'A-Z tiếng Anh'], ['vi', 'A-Z tiếng Việt'], ['lesson', 'Theo bài học']];
+const viCollator = new Intl.Collator('vi');
+// Merge identical terms (same English name, case-insensitive) across modules into one entry.
+function buildGlossary() {
+  const map = new Map();
+  SY.topics.forEach(t => t.modules.forEach(m => {
+    const L = window.LESSONS && window.LESSONS[m.id];
+    if (!L || !L.glossary) return;
+    Object.values(L.glossary).forEach(([en, vi, d]) => {
+      const k = fold(en).replace(/\s+/g, ' ').trim();
+      let e = map.get(k);
+      if (!e) { e = { en, vi, d, mods: [], viAlt: [], key: '' }; map.set(k, e); }
+      else if (vi && fold(vi) !== fold(e.vi) && !e.viAlt.some(x => fold(x) === fold(vi))) e.viAlt.push(vi);
+      if (!e.mods.some(x => x.id === m.id)) e.mods.push({ id: m.id, topic: t.code });
+      e.key = fold(`${e.en} ${e.vi} ${e.viAlt.join(' ')} ${e.d}`);
+    });
+  }));
+  return [...map.values()];
+}
+const modOrder = {};
+SY.topics.forEach(t => t.modules.forEach(m => { modOrder[m.id] = Object.keys(modOrder).length; }));
+// First module in syllabus order (within the chosen subject when one is filtered); used to group the by-lesson view.
+const glFirst = e => e.mods.filter(x => glTopic === 'all' || x.topic === glTopic).reduce((a, x) => (modOrder[x.id] < modOrder[a.id] ? x : a));
+function glFiltered() {
+  if (!glIndex) glIndex = buildGlossary();
+  const words = fold(glQuery).split(/\s+/).filter(Boolean);
+  let list = glIndex.filter(e => (glTopic === 'all' || e.mods.some(x => x.topic === glTopic)) && words.every(w => e.key.includes(w)));
+  // With a query: exact name first, then names starting with it, then the rest (A-Z sorts only; by-lesson keeps its grouping).
+  const phrase = fold(glQuery).replace(/\s+/g, ' ').trim();
+  const rank = e => {
+    if (!phrase || glSort === 'lesson') return 0;
+    const names = [fold(e.en), fold(e.vi)];
+    return names.includes(phrase) ? 0 : names.some(n => n.startsWith(phrase)) ? 1 : 2;
+  };
+  if (glSort === 'en') list = list.sort((a, b) => rank(a) - rank(b) || a.en.localeCompare(b.en, 'en', { sensitivity: 'base' }));
+  else if (glSort === 'vi') list = list.sort((a, b) => rank(a) - rank(b) || viCollator.compare(a.vi, b.vi));
+  else list = list.sort((a, b) => modOrder[glFirst(a).id] - modOrder[glFirst(b).id] || a.en.localeCompare(b.en, 'en', { sensitivity: 'base' }));
+  return list;
+}
+// Module label: opens the lesson room of that module's learn task (same action as the syllabus button).
+function glModBtn(id) {
+  const t = glTasks[id];
+  return t ? `<button class="gl-mod" data-action="enter-room" data-id="${t.id}" title="Mở bài ${id}">${id}</button>` : `<span class="gl-mod off" title="Module chưa có trong lịch">${id}</span>`;
+}
+let glTasks = {};
+function glTermHtml(e) {
+  return `<div class="gl-item"><div class="gl-head"><b>${esc(e.en)}</b> <span class="gl-vi">${esc(e.vi)}${e.viAlt.length ? ` <span class="muted small">(cũng: ${esc(e.viAlt.join('; '))})</span>` : ''}</span></div>
+    <div class="small muted">${esc(e.d)}</div>
+    <div class="gl-mods">${e.mods.map(x => `${glModBtn(x.id)}`).join('')}</div></div>`;
+}
+function renderGlResults() {
+  glTasks = {};
+  Object.keys(MODULE).forEach(id => { glTasks[id] = moduleInfo(MODULE[id]).task; });
+  const list = glFiltered();
+  if (!list.length) return `<p class="small muted">Không tìm thấy thuật ngữ nào${glQuery ? ` khớp "${esc(glQuery)}"` : ''}.</p>`;
+  const shown = list.slice(0, glLimit);
+  let html = `<p class="small muted">${list.length} thuật ngữ${list.length > shown.length ? `, hiện ${shown.length} đầu tiên` : ''}</p><div class="card gl-list">`;
+  let prev = null;
+  shown.forEach(e => {
+    if (glSort === 'lesson') {
+      const f = glFirst(e).id;
+      if (f !== prev) { prev = f; const mod = MODULE[f]; html += `<div class="gl-group">${f}${mod ? ` - ${esc(mod.name)}` : ''}</div>`; }
+    }
+    html += glTermHtml(e);
+  });
+  html += '</div>';
+  if (list.length > shown.length) html += `<p><button class="btn" data-action="gl-more">Xem thêm (còn ${list.length - shown.length})</button></p>`;
+  return html;
+}
+function renderGlossary() {
+  if (!glIndex) glIndex = buildGlossary();
+  const cnt = code => glIndex.filter(e => e.mods.some(x => x.topic === code)).length;
+  return `<h1>Thuật ngữ</h1><p class="sub">${glIndex.length} thuật ngữ từ ${Object.keys(window.LESSONS || {}).length} bài học. Thuật ngữ trùng giữa các module được gộp thành một dòng; bấm nhãn module để mở bài.</p>
+    <div class="card cal-search"><label class="f" for="gl-q">Tìm thuật ngữ</label>
+      <input type="search" id="gl-q" value="${esc(glQuery)}" placeholder="Anh, Việt (không dấu cũng được)..." autocomplete="off"></div>
+    <div class="actions syn-bar"><button class="btn small ${glTopic === 'all' ? 'on' : ''}" data-action="gl-topic" data-k="all">Tất cả (${glIndex.length})</button>${SY.topics.map(t => `<button class="btn small ${glTopic === t.code ? 'on' : ''}" data-action="gl-topic" data-k="${t.code}" title="${esc(t.name)}">${t.code} (${cnt(t.code)})</button>`).join('')}</div>
+    <div class="actions syn-bar"><span class="small muted">Sắp xếp:</span>${GL_SORTS.map(([k, l]) => `<button class="btn small ${glSort === k ? 'on' : ''}" data-action="gl-sort" data-k="${k}">${l}</button>`).join('')}</div>
+    <div id="gl-results">${renderGlResults()}</div>`;
+}
+
 function renderSyllabus() {
   if (!synInit) {
     // First visit: open the subject currently being studied.
@@ -950,6 +1034,9 @@ app.addEventListener('click', e => {
   if (a === 'goto-settings') { view = 'settings'; render(); window.scrollTo(0, 0); }
   if (a === 'toggle-weeks') { showAllWeeks = !showAllWeeks; render(); }
   if (a === 'cal-jump') jumpToTask(id);
+  if (a === 'gl-topic') { glTopic = el.dataset.k; glLimit = GL_PAGE; render(); }
+  if (a === 'gl-sort') { glSort = el.dataset.k; glLimit = GL_PAGE; render(); }
+  if (a === 'gl-more') { glLimit += GL_PAGE; document.getElementById('gl-results').innerHTML = renderGlResults(); }
   if (a === 'syn-filter') { synFilter = el.dataset.k; render(); }
   if (a === 'syn-mat') { synMat = !synMat; render(); }
   if (a === 'syn-topic') { const k = el.dataset.k; if (synOpen.has(k)) synOpen.delete(k); else synOpen.add(k); render(); }
@@ -1000,6 +1087,11 @@ app.addEventListener('submit', e => {
 });
 
 app.addEventListener('input', e => {
+  if (e.target.id === 'gl-q') {
+    glQuery = e.target.value; glLimit = GL_PAGE;
+    document.getElementById('gl-results').innerHTML = renderGlResults();
+    return;
+  }
   if (e.target.id !== 'cal-q') return;
   calQuery = e.target.value;
   const box = document.getElementById('cal-results');
