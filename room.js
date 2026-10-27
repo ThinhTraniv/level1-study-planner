@@ -184,7 +184,7 @@ window.renderRoom = function renderRoom() {
   if (!sides.some(([k]) => k === ss.side)) ss.side = sides[0][0];
   const right = `<aside class="room-side card">
     <div class="rtabs">${sides.map(([k, v]) => `<button class="${ss.side === k ? 'on' : ''}" data-r="side" data-k="${k}">${v}</button>`).join('')}</div>
-    <div class="rbody">${ss.side === 'nav' ? renderNav(t, ss) : ss.side === 'terms' ? renderTerms(L) : ss.side === 'notes' ? renderNotes(t, ss) : renderAsk(t, L, ss)}</div></aside>`;
+    <div class="rbody">${ss.side === 'nav' ? renderNav(t, ss) : ss.side === 'terms' ? renderTerms(L, ss) : ss.side === 'notes' ? renderNotes(t, ss) : renderAsk(t, L, ss)}</div></aside>`;
   return `${head}${renderPhaseCard(t, ss, L, clockMs)}<div class="room-grid">${left}${right}</div>`;
 };
 
@@ -371,9 +371,36 @@ function renderMockResults(t, ss) {
   return `<div class="practice-bar">${langSwitch()}<label class="row small"><input type="checkbox" data-r="onlywrong" ${ss.onlyWrong ? 'checked' : ''}> Chỉ hiện câu sai</label></div>${h}`;
 }
 
-function renderTerms(L) {
+// Glossary panel: terms used in the section being read come first, the rest are collapsed below. Search ignores diacritics.
+let termQ = '';
+const termHtml = ([en, vi, d]) => `<div class="term-item"><b>${esc(en)}</b><div>${esc(vi)}</div><div class="small muted">${esc(d)}</div></div>`;
+function sectionTermKeys(L, ss) {
+  const sec = L.sections[ss.sec] || L.sections[0];
+  const keys = [];
+  String((sec && sec.html) || '').replace(/data-term="([^"]+)"/g, (m, k) => { if (L.glossary[k] && !keys.includes(k)) keys.push(k); });
+  return keys;
+}
+function termResults(L, ss) {
+  const here = sectionTermKeys(L, ss), hereSet = new Set(here);
+  const words = fold(termQ).split(/\s+/).filter(Boolean);
+  const hit = ([en, vi, d]) => words.every(w => fold(`${en} ${vi} ${d}`).includes(w));
+  const mine = here.map(k => L.glossary[k]).filter(hit);
+  const rest = Object.keys(L.glossary).filter(k => !hereSet.has(k)).map(k => L.glossary[k]).filter(hit);
+  if (!mine.length && !rest.length) return `<p class="small muted">Không có thuật ngữ nào khớp "${esc(termQ)}".</p>`;
+  let h = '';
+  if (mine.length) h += `<div class="term-group small">Trong phần đang học (${mine.length})</div>${mine.map(termHtml).join('')}`;
+  else if (!words.length) h += '<p class="small muted">Phần này chưa đánh dấu thuật ngữ nào.</p>';
+  if (rest.length) {
+    const body = `<summary class="term-group small">${mine.length || !words.length ? 'Các thuật ngữ khác' : 'Kết quả'} (${rest.length})</summary>${rest.map(termHtml).join('')}`;
+    h += `<details class="term-rest" ${words.length ? 'open' : ''}>${body}</details>`;
+  }
+  return h;
+}
+function renderTerms(L, ss) {
   if (!L || !L.glossary) return '<div class="empty small">Chọn một module để xem thuật ngữ.</div>';
-  return `<p class="small muted">Rê chuột lên chữ có gạch chân chấm trong bài giảng để xem nhanh.</p>${Object.values(L.glossary).map(([en, vi, d]) => `<div class="term-item"><b>${esc(en)}</b><div>${esc(vi)}</div><div class="small muted">${esc(d)}</div></div>`).join('')}`;
+  return `<input type="search" id="term-q" class="term-q" value="${esc(termQ)}" placeholder="Tìm thuật ngữ (không dấu cũng được)..." autocomplete="off" aria-label="Tìm thuật ngữ">
+    <div class="terms-scroll" id="term-results" tabindex="0">${termResults(L, ss)}</div>
+    <p class="small muted">Rê chuột lên chữ có gạch chân chấm trong bài giảng để xem nhanh.</p>`;
 }
 
 const notesKey = (t, ss) => ss.mod || (t.topic ? `T:${t.topic}` : `M:${mockNo(t)}`);
@@ -488,6 +515,15 @@ function fallbackCopy(text) {
   ta.remove();
   return ok;
 }
+
+app.addEventListener('input', e => {
+  if (view === 'room' && e.target.id === 'term-q') {
+    termQ = e.target.value;
+    const t = roomTask(), ss = t && session(t), L = ss && lessonById(ss.mod);
+    const box = document.getElementById('term-results');
+    if (box && L && L.glossary) box.innerHTML = termResults(L, ss);
+  }
+});
 
 let notesTimer = null;
 app.addEventListener('input', e => {
