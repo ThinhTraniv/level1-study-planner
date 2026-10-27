@@ -126,6 +126,7 @@ function enterRoom(id) {
   roomTaskId = id;
   S.activeRoom = id;
   ending = false;
+  termQ = ''; // a glossary search from another lesson must not filter this one
   const t = roomTask();
   if (S.sessions[t.id] && S.sessions[t.id].revisit !== !!t.done) delete S.sessions[t.id];
   session(t);
@@ -549,7 +550,7 @@ app.addEventListener('change', e => {
     if (t.type === 'mock') { const c = app.querySelector(`.qcell[data-i="${e.target.dataset.i}"]`); if (c) c.classList.add('on'); const g = app.querySelector('[data-r="grade"]'); if (g) g.textContent = `Nộp bài (${Object.keys(ss.answers).length}/${MOCK_SIZE} đã chọn)`; return; }
     render();
   }
-  if (r === 'mod') { ss.mod = e.target.value; ss.sec = 0; ss.seen = [0]; ss.page = 0; save(); render(); }
+  if (r === 'mod') { ss.mod = e.target.value; ss.sec = 0; ss.seen = [0]; ss.page = 0; termQ = ''; save(); render(); }
   if (r === 'onlywrong') { ss.onlyWrong = e.target.checked; save(); render(); }
   if (r === 'jump') showPage(0, Number(e.target.value));
 });
