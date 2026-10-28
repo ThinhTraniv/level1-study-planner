@@ -536,6 +536,24 @@ app.addEventListener('input', e => {
   }
 });
 
+// Glossary tooltip: shown on hover (or tap on touch screens) next to the term, flipped above when there is no room below.
+function showTip(el) {
+  let tip = document.getElementById('term-tip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'term-tip'; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip); }
+  tip.textContent = el.dataset.tip;
+  tip.hidden = false;
+  const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+  const top = r.bottom + 6 + h > window.innerHeight - 8 ? r.top - 6 - h : r.bottom + 6;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${Math.max(8, top)}px`;
+}
+function hideTip() { const tip = document.getElementById('term-tip'); if (tip) tip.hidden = true; }
+app.addEventListener('mouseover', e => { const el = e.target.closest('.term[data-tip]'); if (el) showTip(el); });
+app.addEventListener('mouseout', e => { if (e.target.closest('.term[data-tip]')) hideTip(); });
+app.addEventListener('click', e => { const el = e.target.closest('.term[data-tip]'); if (el) showTip(el); else hideTip(); });
+window.addEventListener('scroll', hideTip, true);
+
 let notesTimer = null;
 app.addEventListener('input', e => {
   if (view !== 'room' || e.target.dataset.r !== 'notes') return;

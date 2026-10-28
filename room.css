@@ -49,10 +49,11 @@ table.keys td:nth-child(2) { white-space: normal; }
 .lesson .table-wrap, .lesson table { display: block; overflow-x: auto; }
 
 .term { border-bottom: 1px dotted var(--accent); cursor: help; position: relative; }
-.term[data-tip]:hover::after {
-  content: attr(data-tip); position: absolute; left: 0; top: 100%; margin-top: 6px; z-index: 10;
-  width: 280px; max-width: 70vw; background: var(--text); color: var(--bg); font-size: 13px; line-height: 1.4;
-  padding: 8px 10px; border-radius: 8px; font-weight: 400;
+/* One floating tooltip for glossary terms, fixed to the viewport so formula boxes and tables cannot clip it. */
+#term-tip {
+  position: fixed; z-index: 50; width: 280px; max-width: calc(100vw - 16px); background: var(--text); color: var(--bg);
+  font: 400 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; text-align: left;
+  padding: 8px 10px; border-radius: 8px; pointer-events: none; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 
 figure.tl { margin: 12px 0; }
