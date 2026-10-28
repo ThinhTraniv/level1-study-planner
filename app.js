@@ -346,6 +346,12 @@ function studyEntries() {
   }));
   return out.concat((S.log || []).map(e => ({ date: e.date, minutes: Number(e.minutes) || 0, topic: e.topic || null, qc: Number(e.qc) || 0, qt: Number(e.qt) || 0 })));
 }
+// Minutes a task really took: the finishing session plus earlier "not finished yet" sessions logged against it.
+function taskActual(t) {
+  return (Number(t.actualMin != null ? t.actualMin : t.minutes) || 0) + sum((S.log || []).filter(e => e.kind === 'unfinished' && e.taskId === t.id), e => Number(e.minutes) || 0);
+}
+// Time beyond the plan, counted once the task is done (shown in grey on Tiến độ and Chương trình).
+const overMin = t => (t.done ? Math.max(0, taskActual(t) - t.minutes) : 0);
 function metrics() {
   const today = todayStr();
   const yest = addDays(today, -1);
@@ -599,11 +605,12 @@ function renderProgress() {
     const e = addDays(w, 6);
     const plan = sum(Object.entries(S.baseline).filter(([d]) => d >= w && d <= e), ([, m]) => m);
     const act = sum(studyEntries().filter(x => x.date >= w && x.date <= e), x => x.minutes);
-    return { w, plan, act };
+    const over = Math.min(act, sum(S.tasks.filter(x => x.done && (x.doneAt || x.date) >= w && (x.doneAt || x.date) <= e), overMin));
+    return { w, plan, act, over };
   });
   const max = Math.max(60, ...wk.map(x => Math.max(x.plan, x.act)));
-  html += `<div class="card"><h2>8 tuần gần nhất</h2><div class="legend"><span><i class="plan"></i>Kế hoạch</span><span><i class="act"></i>Thực tế</span></div>
-    <div class="bars">${wk.map(x => `<div class="col" title="Kế hoạch ${fmtH(x.plan)} - thực tế ${fmtH(x.act)}"><div class="pair"><span class="plan" style="height:${(x.plan / max) * 100}%"></span><span class="act" style="height:${(x.act / max) * 100}%"></span></div><span class="lbl">${fmtDateY(x.w).slice(0, 5)}</span></div>`).join('')}</div></div>`;
+  html += `<div class="card"><h2>8 tuần gần nhất</h2><div class="legend"><span><i class="plan"></i>Kế hoạch</span><span><i class="act"></i>Thực tế</span><span><i class="over"></i>Vượt kế hoạch</span></div>
+    <div class="bars">${wk.map(x => `<div class="col" title="Kế hoạch ${fmtH(x.plan)} - thực tế ${fmtH(x.act)}${x.over ? ` (vượt kế hoạch ${fmtM(x.over)})` : ''}"><div class="pair"><span class="plan" style="height:${(x.plan / max) * 100}%"></span><span class="act-stack" style="height:${(x.act / max) * 100}%">${x.over ? `<span class="over" style="height:${(x.over / Math.max(1, x.act)) * 100}%"></span>` : ''}</span></div><span class="lbl">${fmtDateY(x.w).slice(0, 5)}</span></div>`).join('')}</div></div>`;
 
   html += '<div class="card"><h2>Theo topic</h2><div class="table-wrap"><table><thead><tr><th>Topic</th><th class="num">Trọng số</th><th>Học mới</th><th class="num">Giờ đã học</th><th class="num">Tỷ lệ đúng</th></tr></thead><tbody>';
   for (const code of S.settings.topicOrder) {
@@ -618,10 +625,10 @@ function renderProgress() {
     const accCls = acc == null ? '' : acc < 0.6 ? 'bad' : acc < 0.7 ? 'warn' : 'ok';
     html += `<tr><td>${esc(t.short)}</td><td class="num">${t.weightMin}-${t.weightMax}%</td>
       <td style="min-width:120px"><div class="progress"><span style="width:${Math.round(lp * 100)}%"></span></div><span class="small muted">${Math.round(lp * 100)}%</span></td>
-      <td class="num">${fmtH(sum(te, x => x.minutes))}</td>
+      <td class="num">${fmtH(sum(te, x => x.minutes))}${sum(ts, overMin) ? `<div class="small over-time">+${fmtM(sum(ts, overMin))} vượt kế hoạch</div>` : ''}</td>
       <td class="num">${acc == null ? '<span class="muted">-</span>' : `<span class="badge ${accCls}">${Math.round(acc * 100)}% (${qC}/${qT})</span>`}</td></tr>`;
   }
-  html += '</tbody></table></div><p class="small muted">Tỷ lệ đúng dưới 60% được tô đỏ, 60-70% tô vàng. Mức 70% thường được coi là an toàn khi luyện đề.</p></div>';
+  html += '</tbody></table></div><p class="small muted">Tỷ lệ đúng dưới 60% được tô đỏ, 60-70% tô vàng. Mức 70% thường được coi là an toàn khi luyện đề. Màu xám: thời gian học vượt kế hoạch (vẫn được tính vào giờ đã học).</p></div>';
   return html;
 }
 
@@ -631,7 +638,7 @@ let synMat = false;
 const synOpen = new Set();
 let synInit = false;
 const SYN_ST = {
-  none: { label: 'Chưa học', cls: '' }, learned: { label: 'Đã học', cls: '' },
+  none: { label: 'Chưa học', cls: '' }, doing: { label: 'Đang học', cls: '' }, learned: { label: 'Đã học', cls: '' },
   good: { label: 'Đã vững', cls: 'ok' }, mid: { label: 'Cần ôn', cls: 'warn' }, weak: { label: 'Đang yếu', cls: 'bad' },
 };
 function moduleInfo(m) {
@@ -639,17 +646,18 @@ function moduleInfo(m) {
   const ids = new Set(S.tasks.filter(x => x.moduleId === m.id).map(x => x.id));
   const done = lt.filter(x => x.done);
   const minutes = sum(done, x => Number(x.actualMin != null ? x.actualMin : x.minutes) || 0)
-    + sum((S.log || []).filter(e => e.kind === 'revisit' && ids.has(e.taskId)), e => Number(e.minutes) || 0);
+    + sum((S.log || []).filter(e => (e.kind === 'revisit' || e.kind === 'unfinished') && ids.has(e.taskId)), e => Number(e.minutes) || 0);
+  const over = sum(lt, overMin);
   const qs = (S.qstats || {})[m.id];
   // Before per-module stats existed, the score typed in when finishing the lesson is the only record.
   const typed = done.filter(x => x.qTotal).sort((x, y) => (x.doneAt < y.doneAt ? -1 : 1)).pop();
   const last = qs ? qs.last : typed ? { c: Number(typed.qCorrect) || 0, n: Number(typed.qTotal) } : null;
   const tot = qs ? { c: qs.c, n: qs.n } : last;
-  let st = done.length ? 'learned' : 'none';
+  let st = done.length ? 'learned' : minutes > 0 ? 'doing' : 'none';
   if (last && last.n) { const r = last.c / last.n; st = r >= 0.7 ? 'good' : r >= 0.6 ? 'mid' : 'weak'; }
   const next = lt.find(x => !x.done);
   const task = done.length ? done[done.length - 1] : next;
-  return { st, minutes, last, tot, task, learned: done.length > 0 || !!qs };
+  return { st, minutes, over, last, tot, task, learned: done.length > 0 || !!qs || minutes > 0 };
 }
 function synMatch(st) {
   return synFilter === 'all' || (synFilter === 'none' && st === 'none') || (synFilter === 'weak' && (st === 'weak' || st === 'mid')) || (synFilter === 'good' && st === 'good');
@@ -768,7 +776,7 @@ function renderSyllabus() {
       <div class="syn-stats small"><span><span class="muted">Đã học</span> ${learned}/${t.modules.length} module</span>
       ${n ? `<span><span class="muted">Luyện tập đúng</span> ${Math.round((c / n) * 100)}% số câu</span>` : ''}
       ${worst && info[worst.id].st !== 'good' ? `<span><span class="muted">Cần ôn nhất</span> <span class="txt-${wst.cls}">${worst.id}</span></span>` : ''}
-      <span><span class="muted">Thời gian</span> ${fmtM(sum(tc, x => x.minutes))}</span></div>
+      <span><span class="muted">Thời gian</span> ${fmtM(sum(tc, x => x.minutes))}${sum(tc, x => x.over) ? ` <span class="over-time">(+${fmtM(sum(tc, x => x.over))} vượt kế hoạch)</span>` : ''}</span></div>
       <div class="syn-bar-track"><div style="width:${Math.round((learned / t.modules.length) * 100)}%"></div></div>`;
     if (open) {
       html += `<div class="syn-rows"><div class="syn-row syn-th small muted"><span>Module</span><span>Tên</span><span>Trạng thái</span><span>Đã học</span><span>Luyện tập gần nhất</span><span></span></div>`;
@@ -777,7 +785,7 @@ function renderSyllabus() {
         const mat = S.materials[m.id] || { status: '', note: '' };
         const btn = x.task ? `<button class="btn small" data-action="enter-room" data-id="${x.task.id}">${x.task.done ? 'Ôn lại' : 'Vào học'}</button>` : '';
         html += `<div class="syn-row"><span class="small muted">${m.id}</span><span class="syn-name">${esc(m.name)}</span>
-          <span><span class="badge ${s.cls}">${s.label}</span></span><span class="small">${x.minutes ? fmtM(x.minutes) : '<span class="muted">-</span>'}</span>
+          <span><span class="badge ${s.cls}">${s.label}</span></span><span class="small">${x.minutes ? `${fmtM(x.minutes)}${x.over ? ` <span class="over-time">(+${fmtM(x.over)})</span>` : ''}` : '<span class="muted">-</span>'}</span>
           <span class="small syn-res">${x.last && x.last.n ? `<span class="txt-${s.cls}">${x.last.c}/${x.last.n} câu đúng</span>` : '<span class="muted">Chưa làm</span>'}</span><span>${btn}</span></div>`;
         if (synMat) html += `<div class="syn-mat"><select data-action="mat-status" data-id="${m.id}"><option value="">- Tài liệu -</option>${Object.entries(MAT).map(([k, v]) => `<option value="${k}" ${mat.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
           <input type="text" placeholder="Tài liệu riêng cho module này (sách, trang, link...)" value="${esc(mat.note)}" data-action="mat-note" data-id="${m.id}"></div>`;
@@ -786,7 +794,7 @@ function renderSyllabus() {
     }
     html += '</div>';
   }
-  html += '<p class="small muted">Đã vững: từ 70% số câu đúng ở lần luyện tập gần nhất (7/10). Cần ôn: 60-70%. Đang yếu: dưới 60%.</p>';
+  html += '<p class="small muted">Thời gian màu xám (+...): phần học vượt kế hoạch. Đã vững: từ 70% số câu đúng ở lần luyện tập gần nhất (7/10). Cần ôn: 60-70%. Đang yếu: dưới 60%.</p>';
   return html;
 }
 

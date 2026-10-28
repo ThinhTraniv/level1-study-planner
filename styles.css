@@ -289,3 +289,9 @@ td.num, th.num { white-space: nowrap; }
 .gl-mod.off { border-color: var(--muted); color: var(--muted); cursor: default; }
 .gl-group { margin: 14px 0 2px; padding-top: 6px; font-weight: 600; font-size: 14px; color: var(--accent); }
 #gl-q { width: 100%; padding: 8px 10px; font-size: 15px; }
+
+/* Time beyond the plan: grey, informative rather than an error */
+.over-time { color: var(--muted); }
+.bars .act-stack { background: var(--accent); display: flex; flex-direction: column; }
+.bars .act-stack .over { display: block; width: 100%; max-width: none; background: var(--muted); border-radius: 3px 3px 0 0; }
+.legend i.over { background: var(--muted); }

@@ -65,6 +65,8 @@ function stepView(t, ss, p, ms) {
   const cls = `step ${cur ? 'on' : ''} ${!cur && spent > 0 ? 'past' : ''} ${over ? 'over' : ''} ${fast ? 'fast' : ''}`;
   return { cls, text: `${p.label} ${Math.round(t.minutes * p.pct / 100)}'${over ? ` (quá ${mins}')` : fast ? ` (nhanh ${mins}')` : ''}` };
 }
+// Past the planned time the clock keeps counting; the extra minutes are shown in grey, never as an error.
+const overLabel = (t, ss, ms) => (t.type !== 'mock' && !ss.revisit && ms >= (t.minutes + 1) * 60000 ? `+${Math.floor(ms / 60000) - t.minutes}' ngoài kế hoạch` : '');
 const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`; };
 
 /* ---------- Question pools ---------- */
@@ -175,7 +177,7 @@ window.renderRoom = function renderRoom() {
   const head = `<div class="room-head card">
     <div class="rh-left"><button class="btn small" data-r="leave">← Quay lại</button>
       <div>${t.topic && TOPIC[t.topic] ? `<div class="rh-topic">${esc(TOPIC[t.topic].name)}</div>` : ''}<div class="rh-title">${title}${t.parts > 1 ? ` <span class="muted">(phần ${t.part}/${t.parts})</span>` : ''}</div>${stepper}</div></div>
-    <div class="rh-right"><div class="clock ${ss.pauseStart ? 'paused' : ''} ${isMock && !ss.graded && clockMs < 600000 ? 'late' : ''}"><span id="room-clock">${mmss(clockMs)}</span><small>${isMock && !ss.graded ? ' còn lại' : ` / ${t.minutes}:00`}</small></div>
+    <div class="rh-right"><div class="clock ${ss.pauseStart ? 'paused' : ''} ${isMock && !ss.graded && clockMs < 600000 ? 'late' : ''}"><span id="room-clock">${mmss(clockMs)}</span><small>${isMock && !ss.graded ? ' còn lại' : ` / ${t.minutes}:00`}</small><small id="room-over" class="over-time">${overLabel(t, ss, ms)}</small></div>
       <button class="btn small" data-r="${ss.pauseStart ? 'resume' : 'pause'}">${ss.pauseStart ? 'Tiếp tục' : 'Tạm dừng'}</button>
       <button class="btn small primary" data-r="end">${ss.revisit ? 'Kết thúc xem lại' : 'Kết thúc buổi học'}</button></div>
   </div>`;
@@ -434,6 +436,14 @@ function renderAsk(t, L, ss) {
     <p class="small muted" style="margin-top:12px">Câu hỏi được lưu vào Ghi chú (dòng bắt đầu bằng "Hỏi:") để bạn ghi câu trả lời ngay bên dưới.</p>`;
 }
 
+// The task right after this one in the plan (any type), so a session can roll straight into the next.
+function nextTask(t) {
+  return S.tasks.filter(x => !x.done && x.id !== t.id).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.ord - b.ord))[0] || null;
+}
+function nextBtn(t) {
+  const n = nextTask(t);
+  return n ? `<button class="btn" type="submit" name="go" value="next" title="${esc(n.moduleId ? `${n.moduleId} - ${n.title}` : n.title)}">Lưu và học bài kế tiếp: ${esc(n.moduleId || n.title)}</button>` : '';
+}
 function renderEnd(t, L, ss, ms) {
   const mins = Math.max(1, Math.round(ms / 60000));
   const qs = roomQuestions(t, ss);
@@ -442,13 +452,14 @@ function renderEnd(t, L, ss, ms) {
     return `<div class="card end"><h1>Kết thúc xem lại</h1><p class="sub">${t.topic && TOPIC[t.topic] ? `${esc(TOPIC[t.topic].name)} · ` : ''}${esc(t.title)}</p>
       <form id="end-form" class="done-form">
         <label class="f">Thời gian xem lại (phút) - ghi vào hôm nay ${fmtDateY(todayStr())}<input type="number" name="actual" min="0" value="${mins}"></label>
-        <div class="actions"><button class="btn primary" type="submit">Lưu và rời phòng học</button><button class="btn" type="button" data-r="back">Quay lại</button></div>
+        <div class="actions"><button class="btn primary" type="submit">Lưu và rời phòng học</button>${nextBtn(t)}<button class="btn" type="button" data-r="back">Quay lại</button></div>
       </form></div>`;
   }
   const partial = t.type === 'learn' && mins < t.minutes * 0.7;
+  const over = mins - t.minutes;
   return `<div class="card end"><h1>Kết thúc buổi học</h1><p class="sub">${t.topic && TOPIC[t.topic] ? `${esc(TOPIC[t.topic].name)} · ` : ''}${esc(t.title)}${t.date !== todayStr() ? ` · lịch ngày ${fmtDateY(t.date)}, ghi nhận vào hôm nay ${fmtDateY(todayStr())}` : ''}</p>
     <div class="grid stats" style="margin-bottom:14px">
-      <div class="stat"><div class="v">${mins}'</div><div class="l">thời gian học (kế hoạch ${t.minutes}')</div></div>
+      <div class="stat"><div class="v">${mins}'</div><div class="l">thời gian học (kế hoạch ${t.minutes}'${over > 0 ? `, <span class="over-time">vượt ${over}'</span>` : ''})</div></div>
       <div class="stat ${ss.graded ? (correct / Math.max(1, qs.length) >= 0.7 ? 'ok' : 'warn') : ''}"><div class="v">${ss.graded ? `${correct}/${qs.length}` : '-'}</div><div class="l">câu đúng${ss.graded ? '' : ' (chưa nộp bài)'}</div></div>
       <div class="stat"><div class="v">${L ? `${ss.seen.length}/${L.sections.length}` : '-'}</div><div class="l">phần bài giảng đã xem</div></div>
       <div class="stat"><div class="v">${(S.notes[notesKey(t, ss)] || '').length}</div><div class="l">ký tự ghi chú</div></div>
@@ -460,8 +471,9 @@ function renderEnd(t, L, ss, ms) {
         <label class="f">Tổng số câu<input type="number" name="qt" min="0" value="${ss.graded ? qs.length : ''}"></label>
       </div>
       <label class="f">Ghi chú ngắn cho buổi này<input type="text" name="note" placeholder="Ví dụ: chưa chắc phần forward rate"></label>
-      ${t.nosplit ? '' : `<label class="row small"><input type="checkbox" name="partial" ${partial ? 'checked' : ''}> Chưa xong - phần còn lại để buổi sau</label>`}
-      <div class="actions"><button class="btn primary" type="submit">Lưu check-in và rời phòng học</button><button class="btn" type="button" data-r="back">Quay lại học tiếp</button></div>
+      ${t.nosplit ? '' : `<div class="finish-pick"><label class="row small"><input type="radio" name="finish" value="done" ${partial ? '' : 'checked'}> Đã xong phần này</label>
+        <label class="row small"><input type="radio" name="finish" value="later" ${partial ? 'checked' : ''}> Chưa xong - học tiếp buổi sau${over > 0 ? ' (thời gian hôm nay vẫn được ghi nhận, bài giữ nguyên để học tiếp)' : ' (phần còn lại để buổi sau)'}</label></div>`}
+      <div class="actions"><button class="btn primary" type="submit">Lưu check-in và rời phòng học</button>${nextBtn(t)}<button class="btn" type="button" data-r="back">Quay lại học tiếp</button></div>
     </form></div>`;
 }
 
@@ -480,6 +492,8 @@ function tickClock() {
     return;
   }
   if (el) el.textContent = mmss(ms);
+  const ov = document.getElementById('room-over');
+  if (ov) ov.textContent = overLabel(t, ss, ms);
   if (t.type !== 'learn' || ss.revisit) return;
   // Over its share: recolour the box in place and say so once. No re-render, no tab change.
   PHASES.forEach(p => {
@@ -673,6 +687,7 @@ app.addEventListener('submit', e => {
   const t = roomTask();
   const ss = session(t);
   const f = new FormData(e.target);
+  let keepProgress = false;
   const num = k => (f.get(k) === '' || f.get(k) == null ? null : Number(f.get(k)));
   const today = todayStr();
   S.log = S.log || [];
@@ -685,16 +700,29 @@ app.addEventListener('submit', e => {
     if (qc != null && qt != null && qc > qt) { toast('Số câu đúng không thể lớn hơn tổng số câu.'); return; }
     // Mock questions span several topics: record per-topic scores in the log, keep the task itself topic-free.
     const isMock = t.type === 'mock' && ss.graded;
-    completeTask(t.id, { actual: num('actual') || 0, qc: isMock ? null : qc, qt: isMock ? null : qt, note: (f.get('note') || '').trim(), partial: f.get('partial') === 'on' });
+    const actual = num('actual') || 0;
+    const later = f.get('finish') === 'later';
+    if (later && actual >= t.minutes) {
+      // Ran past the plan and still not finished: today's time is logged, the task stays open to continue next time.
+      S.log.push({ date: today, taskId: t.id, topic: t.topic || null, minutes: actual, qc: qc || 0, qt: qt || 0, kind: 'unfinished' });
+      keepProgress = true;
+    } else {
+      completeTask(t.id, { actual, qc: isMock ? null : qc, qt: isMock ? null : qt, note: (f.get('note') || '').trim(), partial: later });
+    }
     if (isMock) Object.entries(topicScores(roomQuestions(t, ss), ss.answers)).forEach(([c, v]) => S.log.push({ date: today, taskId: t.id, topic: c, minutes: 0, qc: v.c, qt: v.n, kind: 'mock' }));
   }
-  delete S.sessions[t.id];
+  // Continuing later keeps the place in the lesson and the notes; the clock starts again from zero next time.
+  if (keepProgress) Object.assign(ss, { start: Date.now(), pausedTotal: 0, pauseStart: Date.now(), phase: 'learn', phaseSince: 0, phaseMs: {}, warned: {} });
+  else delete S.sessions[t.id];
+  const goNext = e.submitter && e.submitter.value === 'next' ? nextTask(t) : null;
   S.activeRoom = null;
   ending = false;
   save();
   clearInterval(roomTimer);
+  const msg = ss.revisit ? 'Đã ghi thời gian xem lại.' : keepProgress ? 'Đã ghi thời gian hôm nay. Bài này giữ nguyên để học tiếp.' : 'Đã lưu buổi học. Làm tốt lắm!';
+  if (goNext) { enterRoom(goNext.id); toast(`${msg} Bắt đầu: ${goNext.moduleId || goNext.title}.`); return; }
   view = 'today';
-  toast(ss.revisit ? 'Đã ghi thời gian xem lại.' : 'Đã lưu buổi học. Làm tốt lắm!');
+  toast(msg);
   render();
 }, true);
 

@@ -255,3 +255,6 @@ details.term-rest > summary { cursor: pointer; }
 .step.over { background: var(--bad-soft, #fbe3e0); color: var(--bad, #b3261e); }
 .step.on.over { background: var(--bad, #b3261e); color: #fff; }
 .step.fast { color: var(--ok); }
+
+.clock .over-time { color: var(--muted); }
+.finish-pick { display: grid; gap: 4px; margin: 6px 0 4px; }
