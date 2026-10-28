@@ -5,7 +5,7 @@ main.wide { max-width: 1320px; }
 .rh-title { font-weight: 700; overflow-wrap: anywhere; }
 .rh-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .steps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-.step { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.step { border: 0; font: inherit; font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
 .step.past { color: var(--ok); }
 .step.on { background: var(--accent); color: #fff; font-weight: 600; }
 .clock { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; }
@@ -248,3 +248,9 @@ details.los ul { color: var(--muted); }
 details.term-rest { margin-top: 8px; border-top: 1px solid var(--border); }
 details.term-rest > summary { cursor: pointer; }
 .terms-scroll .term-group + .term-item { border-top: 0; }
+
+/* Phase boxes are buttons; over / fast only recolour them */
+.step:hover { filter: brightness(0.95); }
+.step.over { background: var(--bad-soft, #fbe3e0); color: var(--bad, #b3261e); }
+.step.on.over { background: var(--bad, #b3261e); color: #fff; }
+.step.fast { color: var(--ok); }

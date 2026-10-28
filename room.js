@@ -46,14 +46,24 @@ function elapsedMs(ss) {
   const now = Date.now();
   return now - ss.start - ss.pausedTotal - (ss.pauseStart ? now - ss.pauseStart : 0);
 }
-function phaseAt(t, ms) {
-  const total = t.minutes * 60000;
-  let acc = 0;
-  for (const p of PHASES) {
-    acc += (total * p.pct) / 100;
-    if (ms < acc) return p.key;
-  }
-  return 'wrap';
+// Phases follow what the learner does (not the clock); the clock only tells how long each phase has taken against its share.
+const phaseBudget = (t, p) => (t.minutes * 60000 * p.pct) / 100;
+const phaseSpent = (ss, key, ms) => ((ss.phaseMs || {})[key] || 0) + (ss.phase === key ? ms - (ss.phaseSince || 0) : 0);
+function goPhase(t, ss, key) {
+  if (t.type !== 'learn' || ss.revisit || ss.phase === key) return;
+  const ms = elapsedMs(ss);
+  ss.phaseMs = ss.phaseMs || {};
+  ss.phaseMs[ss.phase] = (ss.phaseMs[ss.phase] || 0) + ms - (ss.phaseSince || 0);
+  ss.phase = key;
+  ss.phaseSince = ms;
+}
+// Class and label of a phase box: "over N'" when it has run past its share, "fast N'" for a finished phase done early.
+function stepView(t, ss, p, ms) {
+  const spent = phaseSpent(ss, p.key, ms), diff = spent - phaseBudget(t, p), cur = ss.phase === p.key;
+  const mins = Math.floor(Math.abs(diff) / 60000);
+  const over = diff >= 60000, fast = !cur && spent >= 60000 && -diff >= 60000;
+  const cls = `step ${cur ? 'on' : ''} ${!cur && spent > 0 ? 'past' : ''} ${over ? 'over' : ''} ${fast ? 'fast' : ''}`;
+  return { cls, text: `${p.label} ${Math.round(t.minutes * p.pct / 100)}'${over ? ` (quá ${mins}')` : fast ? ` (nhanh ${mins}')` : ''}` };
 }
 const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`; };
 
@@ -152,16 +162,14 @@ window.renderRoom = function renderRoom() {
   const ss = session(t);
   const ms = elapsedMs(ss);
   const L = lessonById(ss.mod);
-  if (t.type === 'learn') ss.phase = phaseAt(t, ms);
   if (ending) return renderEnd(t, L, ss, ms);
 
   const isMock = t.type === 'mock';
   const limit = t.minutes * 60000;
   const clockMs = isMock && !ss.graded ? Math.max(0, limit - ms) : ms;
   const stepper = t.type === 'learn' && !ss.revisit ? `<div class="steps">${PHASES.map(p => {
-    const mins = Math.round((t.minutes * p.pct) / 100);
-    const idx = PHASES.findIndex(x => x.key === p.key), cur = PHASES.findIndex(x => x.key === ss.phase);
-    return `<span class="step ${idx === cur ? 'on' : ''} ${idx < cur ? 'past' : ''}">${p.label} ${mins}'</span>`;
+    const v = stepView(t, ss, p, ms);
+    return `<button type="button" class="${v.cls}" data-r="phase" data-k="${p.key}" data-phase="${p.key}">${v.text}</button>`;
   }).join('')}</div>` : `<div class="steps"><span class="step on">${ss.revisit ? 'Xem lại' : TYPE_TITLE[t.type]}</span>${t.date !== todayStr() ? `<span class="step">Lịch: ${fmtDate(t.date)}</span>` : ''}</div>`;
   const title = t.moduleId ? `${esc(t.moduleId)} - ${esc(t.title)}` : esc(t.title);
   const head = `<div class="room-head card">
@@ -473,14 +481,16 @@ function tickClock() {
   }
   if (el) el.textContent = mmss(ms);
   if (t.type !== 'learn' || ss.revisit) return;
-  const ph = phaseAt(t, ms);
-  if (ph !== ss.phase) {
-    ss.phase = ph;
-    if (ph === 'practice') ss.tab = 'practice';
-    if (ph === 'wrap') ss.side = 'notes';
-    save();
-    toast(`Chuyển sang giai đoạn: ${PHASES.find(p => p.key === ph).label}`);
-    render();
+  // Over its share: recolour the box in place and say so once. No re-render, no tab change.
+  PHASES.forEach(p => {
+    const box = document.querySelector(`.step[data-phase="${p.key}"]`), v = stepView(t, ss, p, ms);
+    if (box) { box.className = v.cls; box.textContent = v.text; }
+  });
+  const cur = PHASES.find(p => p.key === ss.phase);
+  ss.warned = ss.warned || {};
+  if (cur && !ss.warned[cur.key] && phaseSpent(ss, cur.key, ms) > phaseBudget(t, cur)) {
+    ss.warned[cur.key] = true; save();
+    toast(`Giai đoạn ${cur.label} đã hết thời gian dự kiến (${Math.round(t.minutes * cur.pct / 100)}'). Bạn có thể tiếp tục hoặc chuyển giai đoạn.`);
   }
 }
 
@@ -570,13 +580,19 @@ app.addEventListener('click', e => {
   if (r === 'resume') resumeRoom();
   if (r === 'end') { ending = true; pauseRoom(); }
   if (r === 'back') { ending = false; resumeRoom(); }
-  if (r === 'tab') ss.tab = b.dataset.k;
+  if (r === 'tab') { ss.tab = b.dataset.k; if (ss.tab === 'lesson') goPhase(t, ss, 'learn'); if (ss.tab === 'practice') goPhase(t, ss, 'practice'); }
+  if (r === 'phase') {
+    goPhase(t, ss, b.dataset.k);
+    if (b.dataset.k === 'learn' || b.dataset.k === 'warmup') ss.tab = 'lesson';
+    if (b.dataset.k === 'practice') ss.tab = 'practice';
+    if (b.dataset.k === 'wrap') ss.side = 'notes';
+  }
   if (r === 'side') ss.side = b.dataset.k;
   if (r === 'goto') { const q = document.getElementById(`q-${b.dataset.i}`); if (q) q.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
   if (r === 'open-mod') { ss.mod = b.dataset.m; ss.tab = 'lesson'; ss.sec = 0; ss.seen = [0]; ss.page = 0; window.scrollTo(0, 0); }
   if (r === 'sec') {
     const i = Number(b.dataset.i);
-    if (L && i >= 0 && i < L.sections.length) { ss.sec = i; if (!ss.seen.includes(i)) ss.seen.push(i); app.querySelector('.room-main') && window.scrollTo({ top: app.querySelector('.room-main').offsetTop - 70, behavior: 'smooth' }); }
+    if (L && i >= 0 && i < L.sections.length) { goPhase(t, ss, 'learn'); ss.sec = i; if (!ss.seen.includes(i)) ss.seen.push(i); app.querySelector('.room-main') && window.scrollTo({ top: app.querySelector('.room-main').offsetTop - 70, behavior: 'smooth' }); }
   }
   if (r === 'page') { showPage(Number(b.dataset.i)); return; }
   if (r === 'fullscreen') {
@@ -592,6 +608,7 @@ app.addEventListener('click', e => {
       return;
     }
     ss.graded = true;
+    goPhase(t, ss, 'wrap');
     recordPractice(roomQuestions(t, ss), ss.answers);
     if (t.type === 'mock') {
       S.mockResults = S.mockResults || {};
