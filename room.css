@@ -258,3 +258,7 @@ details.term-rest > summary { cursor: pointer; }
 
 .clock .over-time { color: var(--muted); }
 .finish-pick { display: grid; gap: 4px; margin: 6px 0 4px; }
+
+/* A lesson split over several sessions: this session's sections are outlined */
+.pill.inpart { box-shadow: 0 0 0 2px var(--accent); }
+.part-note { margin: -4px 0 10px; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); }

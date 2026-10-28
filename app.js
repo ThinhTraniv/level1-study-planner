@@ -303,11 +303,11 @@ function reflow(mode) {
 }
 
 /* ---------- Task actions ---------- */
-function completeTask(id, { actual, qc, qt, note, partial }) {
+function completeTask(id, { actual, qc, qt, note, partial, upTo }) {
   const t = S.tasks.find(x => x.id === id);
   if (!t) return;
   const today = todayStr();
-  const stats = { actualMin: actual, qCorrect: qc, qTotal: qt, note, doneAt: today };
+  const stats = { actualMin: actual, qCorrect: qc, qTotal: qt, note, doneAt: today, upTo: upTo || null };
   if (partial && !t.nosplit && actual > 0 && actual < t.minutes) {
     const doneMin = Math.max(15, Math.min(t.minutes - 15, Math.round(actual / 15) * 15));
     S.tasks.push({ ...t, ...stats, id: S.nextId++, minutes: doneMin, done: true, partial: true });
@@ -389,8 +389,34 @@ function matBadge(moduleId) {
   return s && m.status !== 'co' ? `<span class="badge ${s.cls}">${s.label}</span>` : '';
 }
 const ROOM_VERB = { learn: 'Vào học', review: 'Vào ôn', mock: 'Vào thi', mockreview: 'Chữa đề' };
+// A module studied over several sessions: each session covers a run of lesson sections, split in proportion to the
+// sessions' minutes. Recomputed from the current plan, so splitting or rescheduling a session re-divides the lesson.
+function partRange(t) {
+  const L = t.type === 'learn' && window.LESSONS && window.LESSONS[t.moduleId];
+  if (!L || !L.sections.length) return null;
+  const n = L.sections.length;
+  const pieces = S.tasks.filter(x => x.key === t.key)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.done ? 1 : 0) - (a.done ? 1 : 0) || a.id - b.id));
+  const idx = Math.max(0, pieces.indexOf(t));
+  if (pieces.length < 2) return { from: 1, to: n, idx: 0, count: 1 };
+  const tot = sum(L.sections, x => x.minutes || 1);
+  let acc = 0;
+  const mid = L.sections.map(x => { const m = x.minutes || 1; const v = (acc + m / 2) / tot; acc += m; return v; });
+  const all = sum(pieces, x => x.minutes);
+  let cum = 0, prev = 0;
+  const ranges = pieces.map((p, j) => {
+    cum += p.minutes;
+    const from = Math.min(prev + 1, n);
+    const to = j === pieces.length - 1 ? n : Math.min(n, Math.max(from, mid.filter(x => x < cum / all).length));
+    prev = to;
+    return { from, to };
+  });
+  return { ...ranges[idx], idx, count: pieces.length };
+}
+const rangeText = r => `phần ${r.from}${r.to > r.from ? `-${r.to}` : ''}`;
 function taskLabel(t) {
-  const part = t.parts > 1 ? ` (phần ${t.part}/${t.parts})` : '';
+  const r = partRange(t);
+  const part = r && r.count > 1 ? ` (buổi ${r.idx + 1}/${r.count}: ${rangeText(r)})` : t.parts > 1 ? ` (phần ${t.part}/${t.parts})` : '';
   // Learn tasks show their subject in front of the module name; review titles already name the subject.
   const tag = t.type === 'learn' && t.topic && TOPIC[t.topic] ? `<span class="topic-tag">${esc(TOPIC[t.topic].short)}</span> ` : '';
   return `${tag}${esc(t.title)}${part}`;
@@ -421,7 +447,7 @@ function render() {
 function renderTaskRow(t) {
   const m = t.moduleId && S.materials[t.moduleId];
   const note = m && m.note ? `<div class="small muted">Tài liệu: ${esc(m.note)}</div>` : '';
-  const result = t.done ? `<div class="small muted">Đã học ${fmtM(t.actualMin || t.minutes)}${t.qTotal ? ` · đúng ${t.qCorrect}/${t.qTotal} câu` : ''}${t.note ? ` · ${esc(t.note)}` : ''}</div>` : '';
+  const result = t.done ? `<div class="small muted">Đã học ${fmtM(t.actualMin || t.minutes)}${t.qTotal ? ` · đúng ${t.qCorrect}/${t.qTotal} câu${t.upTo ? ` (luyện tập phần 1-${t.upTo})` : ''}` : ''}${t.note ? ` · ${esc(t.note)}` : ''}</div>` : '';
   const form = openForm === t.id ? `
     <form class="done-form" data-form="${t.id}">
       <div class="row">
@@ -651,13 +677,15 @@ function moduleInfo(m) {
   const qs = (S.qstats || {})[m.id];
   // Before per-module stats existed, the score typed in when finishing the lesson is the only record.
   const typed = done.filter(x => x.qTotal).sort((x, y) => (x.doneAt < y.doneAt ? -1 : 1)).pop();
-  const last = qs ? qs.last : typed ? { c: Number(typed.qCorrect) || 0, n: Number(typed.qTotal) } : null;
+  const last = qs ? qs.last : typed ? { c: Number(typed.qCorrect) || 0, n: Number(typed.qTotal), upTo: typed.upTo } : null;
+  // The 70% mark is judged on whole-lesson practice only; an attempt on part of the lesson is shown for reference.
+  const full = qs ? qs.lastFull || (qs.last && !qs.last.upTo ? qs.last : null) : last && !last.upTo ? last : null;
   const tot = qs ? { c: qs.c, n: qs.n } : last;
-  let st = done.length ? 'learned' : minutes > 0 ? 'doing' : 'none';
-  if (last && last.n) { const r = last.c / last.n; st = r >= 0.7 ? 'good' : r >= 0.6 ? 'mid' : 'weak'; }
+  let st = done.length && done.length === lt.length ? 'learned' : minutes > 0 || done.length || (last && last.n) ? 'doing' : 'none';
+  if (full && full.n) { const r = full.c / full.n; st = r >= 0.7 ? 'good' : r >= 0.6 ? 'mid' : 'weak'; }
   const next = lt.find(x => !x.done);
-  const task = done.length ? done[done.length - 1] : next;
-  return { st, minutes, over, last, tot, task, learned: done.length > 0 || !!qs || minutes > 0 };
+  const task = next || done[done.length - 1]; // the next session to study, or a finished one to review
+  return { st, minutes, over, last, full, tot, task, learned: done.length > 0 || !!qs || minutes > 0 };
 }
 function synMatch(st) {
   return synFilter === 'all' || (synFilter === 'none' && st === 'none') || (synFilter === 'weak' && (st === 'weak' || st === 'mid')) || (synFilter === 'good' && st === 'good');
@@ -767,8 +795,8 @@ function renderSyllabus() {
     const tc = t.modules.map(m => info[m.id]);
     const learned = tc.filter(x => x.learned).length;
     const c = sum(tc, x => (x.tot ? x.tot.c : 0)), n = sum(tc, x => (x.tot ? x.tot.n : 0));
-    const scored = t.modules.filter(m => info[m.id].last && info[m.id].last.n);
-    const worst = scored.sort((x, y) => info[x.id].last.c / info[x.id].last.n - info[y.id].last.c / info[y.id].last.n)[0];
+    const scored = t.modules.filter(m => info[m.id].full && info[m.id].full.n);
+    const worst = scored.sort((x, y) => info[x.id].full.c / info[x.id].full.n - info[y.id].full.c / info[y.id].full.n)[0];
     const open = synOpen.has(code) || synFilter !== 'all';
     const wst = worst ? SYN_ST[info[worst.id].st] : null;
     html += `<div class="card syn-topic"><button class="syn-head" data-action="syn-topic" data-k="${code}" aria-expanded="${open}">
@@ -786,7 +814,7 @@ function renderSyllabus() {
         const btn = x.task ? `<button class="btn small" data-action="enter-room" data-id="${x.task.id}">${x.task.done ? 'Ôn lại' : 'Vào học'}</button>` : '';
         html += `<div class="syn-row"><span class="small muted">${m.id}</span><span class="syn-name">${esc(m.name)}</span>
           <span><span class="badge ${s.cls}">${s.label}</span></span><span class="small">${x.minutes ? `${fmtM(x.minutes)}${x.over ? ` <span class="over-time">(+${fmtM(x.over)})</span>` : ''}` : '<span class="muted">-</span>'}</span>
-          <span class="small syn-res">${x.last && x.last.n ? `<span class="txt-${s.cls}">${x.last.c}/${x.last.n} câu đúng</span>` : '<span class="muted">Chưa làm</span>'}</span><span>${btn}</span></div>`;
+          <span class="small syn-res">${x.last && x.last.n ? (x.last.upTo ? `<span title="Luyện tập khi mới học tới phần ${x.last.upTo}">${x.last.c}/${x.last.n} câu (phần 1-${x.last.upTo})</span>` : `<span class="txt-${s.cls}">${x.last.c}/${x.last.n} câu đúng</span>`) : '<span class="muted">Chưa làm</span>'}</span><span>${btn}</span></div>`;
         if (synMat) html += `<div class="syn-mat"><select data-action="mat-status" data-id="${m.id}"><option value="">- Tài liệu -</option>${Object.entries(MAT).map(([k, v]) => `<option value="${k}" ${mat.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
           <input type="text" placeholder="Tài liệu riêng cho module này (sách, trang, link...)" value="${esc(mat.note)}" data-action="mat-note" data-id="${m.id}"></div>`;
       }
@@ -794,7 +822,7 @@ function renderSyllabus() {
     }
     html += '</div>';
   }
-  html += '<p class="small muted">Thời gian màu xám (+...): phần học vượt kế hoạch. Đã vững: từ 70% số câu đúng ở lần luyện tập gần nhất (7/10). Cần ôn: 60-70%. Đang yếu: dưới 60%.</p>';
+  html += '<p class="small muted">Thời gian màu xám (+...): phần học vượt kế hoạch. Đã vững: từ 70% số câu đúng ở lần luyện tập toàn bài gần nhất (7/10); luyện tập khi mới học một phần chỉ để tham khảo. Cần ôn: 60-70%. Đang yếu: dưới 60%.</p>';
   return html;
 }
 

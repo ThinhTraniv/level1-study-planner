@@ -31,7 +31,12 @@ const mockSession = t => Number(String(t.key).split(':')[2]);
 function session(t) {
   if (!S.sessions[t.id]) {
     const base = { start: Date.now(), pausedTotal: 0, pauseStart: null, side: 'notes', sec: 0, seen: [0], page: 0, answers: {}, graded: false, phase: 'warmup', revisit: !!t.done };
-    if (t.type === 'learn') Object.assign(base, { tab: 'lesson', mod: t.moduleId, qset: buildPracticeSet(t.moduleId) });
+    if (t.type === 'learn') {
+      const r = partRange(t);
+      const first = r ? r.from - 1 : 0;
+      Object.assign(base, { tab: 'lesson', mod: t.moduleId, sec: first, seen: [first], qset: null });
+      if (!base.revisit) markSeen(t.moduleId, first);
+    }
     if (t.type === 'review') Object.assign(base, { tab: 'practice', mod: topicModules(t.topic)[0], qset: buildReviewSet(t.topic) });
     if (t.type === 'mock') Object.assign(base, { tab: 'practice', qset: buildMockSet(mockSession(t)), qi: 0 });
     if (t.type === 'mockreview') Object.assign(base, { tab: 'results', mod: null, onlyWrong: true });
@@ -39,8 +44,29 @@ function session(t) {
   }
   const ss = S.sessions[t.id];
   if (t.type === 'learn' && !ss.mod) ss.mod = t.moduleId; // sessions saved before review/mock rooms existed
-  if (t.type === 'learn' && !ss.qset && lessonById(t.moduleId)) ss.qset = lessonById(t.moduleId).practice.map((_, i) => ({ m: t.moduleId, i })); // saved before shuffling existed: keep original order
   return ss;
+}
+// Sections read so far, kept per module across all its sessions (0-based indexes).
+function markSeen(mod, i) {
+  S.secSeen = S.secSeen || {};
+  const a = S.secSeen[mod] = S.secSeen[mod] || [];
+  if (!a.includes(i)) a.push(i);
+}
+const seenOf = mod => ((S.secSeen || {})[mod] || []);
+// Practice covers the lesson up to the furthest section read (1-based); the whole lesson once the last one is read.
+const coverOf = mod => (seenOf(mod).length ? Math.max(...seenOf(mod)) + 1 : 1);
+// Rebuild the practice set while it is untouched if the learner has read further since it was drawn.
+function syncPracticeSet(t, ss) {
+  if (t.type !== 'learn' || ss.graded || Object.keys(ss.answers).length) return;
+  const L = lessonById(ss.mod);
+  if (!L) return;
+  // Reviewing a finished lesson, or a lesson finished before reading was tracked: practise the whole lesson.
+  const finished = ss.revisit || S.tasks.filter(x => x.key === `L:${ss.mod}`).every(x => x.done);
+  const cover = finished ? L.sections.length : Math.max(coverOf(ss.mod), ...ss.seen.map(i => i + 1));
+  if (ss.qset && ss.qcover === cover) return;
+  ss.qset = buildPracticeSet(ss.mod, cover);
+  ss.qcover = cover;
+  save();
 }
 function elapsedMs(ss) {
   const now = Date.now();
@@ -63,7 +89,8 @@ function stepView(t, ss, p, ms) {
   const mins = Math.floor(Math.abs(diff) / 60000);
   const over = diff >= 60000, fast = !cur && spent >= 60000 && -diff >= 60000;
   const cls = `step ${cur ? 'on' : ''} ${!cur && spent > 0 ? 'past' : ''} ${over ? 'over' : ''} ${fast ? 'fast' : ''}`;
-  return { cls, text: `${p.label} ${Math.round(t.minutes * p.pct / 100)}'${over ? ` (quá ${mins}')` : fast ? ` (nhanh ${mins}')` : ''}` };
+  const label = p.key === 'warmup' && t.type === 'learn' && (partRange(t) || {}).idx > 0 ? 'Ôn nhanh' : p.label;
+  return { cls, text: `${label} ${Math.round(t.minutes * p.pct / 100)}'${over ? ` (quá ${mins}')` : fast ? ` (nhanh ${mins}')` : ''}` };
 }
 // Past the planned time the clock keeps counting; the extra minutes are shown in grey, never as an error.
 const overLabel = (t, ss, ms) => (t.type !== 'mock' && !ss.revisit && ms >= (t.minutes + 1) * 60000 ? `+${Math.floor(ms / 60000) - t.minutes}' ngoài kế hoạch` : '');
@@ -88,10 +115,13 @@ function qOf(ref) {
   return { q: src.q, choices: src.choices, explain: src.explain, answer: base.answer, src: ref.m, p: ref.p || base.choices.map((_, k) => k), lang: en ? 'en' : 'vi' };
 }
 // A fresh attempt for a module: random questions from its bank, random order, shuffled choices.
-function buildPracticeSet(m) {
-  const L = lessonById(m);
-  if (!L) return [];
-  return shuffle(L.practice.map((_, i) => i)).slice(0, PRACTICE_SIZE).map(i => makeRef(m, i));
+// Questions are tagged with the latest lesson section they need (content/qsec); only those already read are drawn.
+const qPool = (m, upTo) => {
+  const L = lessonById(m), tags = window.QSEC && window.QSEC[m];
+  return L ? L.practice.map((_, i) => i).filter(i => !tags || !upTo || tags[i] <= upTo) : [];
+};
+function buildPracticeSet(m, upTo) {
+  return shuffle(qPool(m, upTo)).slice(0, PRACTICE_SIZE).map(i => makeRef(m, i));
 }
 
 // Review: round-robin over the topic's modules so every module is represented.
@@ -176,7 +206,7 @@ window.renderRoom = function renderRoom() {
   const title = t.moduleId ? `${esc(t.moduleId)} - ${esc(t.title)}` : esc(t.title);
   const head = `<div class="room-head card">
     <div class="rh-left"><button class="btn small" data-r="leave">← Quay lại</button>
-      <div>${t.topic && TOPIC[t.topic] ? `<div class="rh-topic">${esc(TOPIC[t.topic].name)}</div>` : ''}<div class="rh-title">${title}${t.parts > 1 ? ` <span class="muted">(phần ${t.part}/${t.parts})</span>` : ''}</div>${stepper}</div></div>
+      <div>${t.topic && TOPIC[t.topic] ? `<div class="rh-topic">${esc(TOPIC[t.topic].name)}</div>` : ''}<div class="rh-title">${title}${(pr => (pr && pr.count > 1 ? ` <span class="muted">(buổi ${pr.idx + 1}/${pr.count}: ${rangeText(pr)})</span>` : t.parts > 1 ? ` <span class="muted">(phần ${t.part}/${t.parts})</span>` : ''))(partRange(t))}</div>${stepper}</div></div>
     <div class="rh-right"><div class="clock ${ss.pauseStart ? 'paused' : ''} ${isMock && !ss.graded && clockMs < 600000 ? 'late' : ''}"><span id="room-clock">${mmss(clockMs)}</span><small>${isMock && !ss.graded ? ' còn lại' : ` / ${t.minutes}:00`}</small><small id="room-over" class="over-time">${overLabel(t, ss, ms)}</small></div>
       <button class="btn small" data-r="${ss.pauseStart ? 'resume' : 'pause'}">${ss.pauseStart ? 'Tiếp tục' : 'Tạm dừng'}</button>
       <button class="btn small primary" data-r="end">${ss.revisit ? 'Kết thúc xem lại' : 'Kết thúc buổi học'}</button></div>
@@ -222,6 +252,13 @@ function renderPhaseCard(t, ss, L, clockMs) {
   }
   if (t.type === 'review') return `<div class="banner ok phase"><b>Ôn tập ${esc(TOPIC[t.topic].short)}:</b> làm bộ ${ss.qset.length} câu trộn từ các module, nộp bài, rồi dùng tab Xem lại bài giảng cho những module còn yếu.</div>`;
   if (t.type === 'mockreview') return '<div class="banner ok phase"><b>Chữa đề:</b> với mỗi câu sai, đọc lời giải rồi mở bài giảng của module đó (nút bên dưới câu) để học lại.</div>';
+  const pr = t.type === 'learn' ? partRange(t) : null;
+  if (ss.phase === 'warmup' && L && pr && pr.idx > 0) {
+    const keys = [];
+    L.sections.slice(0, pr.from - 1).forEach(sec => String(sec.html).replace(/data-term="([^"]+)"/g, (m, k) => { if (L.glossary && L.glossary[k] && !keys.includes(k)) keys.push(k); }));
+    const pick = keys.slice(-6).map(k => L.glossary[k]);
+    return `<div class="banner ok phase"><b>Ôn nhanh buổi trước (khoảng 3 phút):</b> nhắc lại trong đầu nghĩa của các thuật ngữ sau, rồi mở khung Thuật ngữ bên phải để kiểm tra.${pick.length ? `<ol>${pick.map(g => `<li>${esc(g[0])}</li>`).join('')}</ol>` : ''}Hôm nay học ${rangeText(pr)}.</div>`;
+  }
   if (ss.phase === 'warmup' && L && L.warmup) return `<div class="banner ok phase"><b>Khởi động (khoảng 5 phút):</b> trả lời nhanh trong đầu hoặc ghi vào Ghi chú, chưa cần xem tài liệu.<ol>${L.warmup.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`;
   if (ss.phase === 'practice') return '<div class="banner warn phase"><b>Giai đoạn luyện tập:</b> mở tab Luyện tập, làm hết rồi bấm Nộp bài. Không xem lời giải trước.</div>';
   if (ss.phase === 'wrap' && L && L.wrapup) return `<div class="banner ok phase"><b>Tổng kết:</b> viết vào Ghi chú.<ol>${L.wrapup.map(x => `<li>${esc(x)}</li>`).join('')}</ol>Xong thì bấm <b>Kết thúc buổi học</b>.</div>`;
@@ -232,8 +269,21 @@ function renderLesson(t, L, ss) {
   if (!L) return '<div class="empty">Module này chưa có bài giảng.</div>';
   const sec = L.sections[ss.sec] || L.sections[0];
   if (!L.sections[ss.sec]) ss.sec = 0;
-  const nav = L.sections.map((s, i) => `<button class="pill ${i === ss.sec ? 'on' : ''} ${ss.seen.includes(i) ? 'seen' : ''}" data-r="sec" data-i="${i}" title="${esc(s.title)}">${i + 1}</button>`).join('');
-  return `<div class="secnav">${nav}<span class="small muted">${ss.seen.length}/${L.sections.length} phần đã xem</span></div>
+  const r = t.type === 'learn' ? partRange(t) : null;
+  const multi = r && r.count > 1;
+  const seen = t.type === 'learn' ? seenOf(ss.mod) : ss.seen;
+  const inPart = i => multi && i >= r.from - 1 && i <= r.to - 1;
+  const nav = L.sections.map((s, i) => `<button class="pill ${i === ss.sec ? 'on' : ''} ${seen.includes(i) || ss.seen.includes(i) ? 'seen' : ''} ${inPart(i) ? 'inpart' : ''}" data-r="sec" data-i="${i}" title="${esc(s.title)}">${i + 1}</button>`).join('');
+  let partNote = '';
+  if (multi && !ss.revisit) {
+    const own = [];
+    for (let i = r.from - 1; i < r.to; i++) own.push(i);
+    const left = own.filter(i => !seen.includes(i));
+    const behind = [];
+    for (let i = 0; i < r.from - 1; i++) if (!seen.includes(i)) behind.push(i + 1);
+    partNote = `<div class="part-note small"><b>Buổi ${r.idx + 1}/${r.count}: ${rangeText(r)}</b> (khung viền xanh).${behind.length ? ` Buổi trước còn chưa xem: phần ${behind.join(', ')}.` : ''}${!left.length ? (r.to < L.sections.length ? ` Bạn đã xem hết nội dung buổi này - có thể sang Luyện tập, học tiếp phần ${r.to + 1}, hoặc kết thúc buổi.` : ' Bạn đã xem hết bài - sang Luyện tập toàn bài.') : ''}</div>`;
+  }
+  return `<div class="secnav">${nav}<span class="small muted">${seen.length}/${L.sections.length} phần đã xem</span></div>${partNote}
     <article class="lesson"><h2>${esc(sec.title)} <span class="small muted">~${sec.minutes} phút</span></h2>${sec.html}</article>
     <div class="actions pager"><button class="btn" data-r="sec" data-i="${ss.sec - 1}" ${ss.sec === 0 ? 'disabled' : ''}>← Phần trước</button>
     <button class="btn primary" data-r="sec" data-i="${ss.sec + 1}" ${ss.sec >= L.sections.length - 1 ? 'disabled' : ''}>Phần tiếp →</button></div>
@@ -288,12 +338,17 @@ function showPage(delta, absolute) {
 }
 
 // Questions shown in this room: the module's own set for learn, the stored set for review/mock.
+// Section the practice set stops at, or null when it covers the whole lesson.
+function partCover(t, ss) {
+  const L = t.type === 'learn' && lessonById(ss.mod);
+  return L && ss.qcover && ss.qcover < L.sections.length ? ss.qcover : null;
+}
 function roomQuestions(t, ss) {
   return (ss.qset || []).map(qOf).filter(Boolean);
 }
 // Each graded attempt is stored per module (questions in review/mock sets carry their module in q.src);
 // the Chương trình tab shows the latest attempt and the running total.
-function recordPractice(qs, answers) {
+function recordPractice(qs, answers, upTo) {
   S.qstats = S.qstats || {};
   const by = {};
   qs.forEach((q, i) => {
@@ -303,7 +358,8 @@ function recordPractice(qs, answers) {
   });
   Object.entries(by).forEach(([m, v]) => {
     const x = S.qstats[m] || { c: 0, n: 0, tries: 0 };
-    S.qstats[m] = { c: x.c + v.c, n: x.n + v.n, tries: x.tries + 1, last: { c: v.c, n: v.n, date: todayStr() } };
+    const last = { c: v.c, n: v.n, date: todayStr(), upTo: upTo || null };
+    S.qstats[m] = { c: x.c + v.c, n: x.n + v.n, tries: x.tries + 1, last, lastFull: upTo ? x.lastFull || null : last };
   });
 }
 function topicScores(qs, answers) {
@@ -339,11 +395,18 @@ function resultStrip(qs, answers) {
 const langSwitch = () => `<div class="lang-switch" role="group" aria-label="Ngôn ngữ câu hỏi"><button class="${LANG === 'en' ? 'on' : ''}" data-r="lang" data-k="en">EN</button><button class="${LANG === 'vi' ? 'on' : ''}" data-r="lang" data-k="vi">VI</button></div>`;
 
 function renderPractice(t, ss) {
+  syncPracticeSet(t, ss);
   const qs = roomQuestions(t, ss);
+  if (!qs.length && t.type === 'learn' && ss.qcover) return `<div class="empty">Bạn mới học tới phần ${ss.qcover} - chưa có câu luyện tập nào chỉ dùng kiến thức tới phần này. Học thêm vài phần rồi quay lại tab Luyện tập.</div>`;
   if (!qs.length) return '<div class="empty">Chưa có câu hỏi cho buổi này.</div>';
+  const cov = partCover(t, ss);
+  const pool = t.type === 'learn' ? qPool(ss.mod, ss.qcover).length : 0;
+  const scope = t.type !== 'learn' ? '' : cov
+    ? `<div class="banner ${pool < 5 ? 'warn' : 'ok'} small"><b>Luyện tập phần 1-${cov}</b> (bạn đã học tới phần ${cov}/${lessonById(ss.mod).sections.length}): ${qs.length} câu rút từ ${pool} câu thuộc các phần này.${pool < 5 ? ' Còn ít câu - nên học thêm vài phần rồi luyện tập.' : ''} Điểm này để tham khảo; mốc 70% tính ở lần luyện tập toàn bài.</div>`
+    : '<div class="banner ok small"><b>Luyện tập toàn bài:</b> bạn đã học hết các phần, câu hỏi rút từ cả ngân hàng 30 câu.</div>';
   const correct = qs.filter((q, i) => ss.answers[i] === q.answer).length;
   const isMock = t.type === 'mock';
-  let h = `<div class="practice-bar">${langSwitch()}<span class="small muted">${ss.graded ? '' : `${qs.length} câu, mỗi câu 3 lựa chọn như đề thi thật. Mục tiêu khoảng 90 giây mỗi câu.`}</span></div>`;
+  let h = `${ss.graded ? '' : scope}<div class="practice-bar">${langSwitch()}<span class="small muted">${ss.graded ? '' : `${qs.length} câu, mỗi câu 3 lựa chọn như đề thi thật. Mục tiêu khoảng 90 giây mỗi câu.`}</span></div>`;
   if (ss.graded) {
     h += `<div class="banner ${correct / qs.length >= 0.7 ? 'ok' : 'warn'}"><b>Kết quả: ${correct}/${qs.length} câu đúng (${Math.round((correct / qs.length) * 100)}%).</b> ${correct / qs.length >= 0.7 ? 'Đạt mức an toàn 70%.' : 'Dưới 70% - xem kỹ lời giải và học lại phần liên quan.'}
         ${resultStrip(qs, ss.answers)}
@@ -624,7 +687,7 @@ app.addEventListener('click', e => {
   if (r === 'open-mod') { ss.mod = b.dataset.m; ss.tab = 'lesson'; ss.sec = 0; ss.seen = [0]; ss.page = 0; window.scrollTo(0, 0); }
   if (r === 'sec') {
     const i = Number(b.dataset.i);
-    if (L && i >= 0 && i < L.sections.length) { goPhase(t, ss, 'learn'); ss.sec = i; if (!ss.seen.includes(i)) ss.seen.push(i); app.querySelector('.room-main') && window.scrollTo({ top: app.querySelector('.room-main').offsetTop - 70, behavior: 'smooth' }); }
+    if (L && i >= 0 && i < L.sections.length) { goPhase(t, ss, 'learn'); ss.sec = i; if (!ss.seen.includes(i)) ss.seen.push(i); if (t.type === 'learn' && !ss.revisit) markSeen(ss.mod, i); app.querySelector('.room-main') && window.scrollTo({ top: app.querySelector('.room-main').offsetTop - 70, behavior: 'smooth' }); }
   }
   if (r === 'page') { showPage(Number(b.dataset.i)); return; }
   if (r === 'fullscreen') {
@@ -641,7 +704,7 @@ app.addEventListener('click', e => {
     }
     ss.graded = true;
     goPhase(t, ss, 'wrap');
-    recordPractice(roomQuestions(t, ss), ss.answers);
+    recordPractice(roomQuestions(t, ss), ss.answers, partCover(t, ss));
     if (t.type === 'mock') {
       S.mockResults = S.mockResults || {};
       S.mockResults[mockNo(t)] = S.mockResults[mockNo(t)] || {};
@@ -651,8 +714,8 @@ app.addEventListener('click', e => {
   }
   if (r === 'retry') {
     // New attempt: same module (or same review set), new question order and new choice order.
-    ss.qset = t.type === 'learn' ? buildPracticeSet(t.moduleId) : shuffle((ss.qset || []).map(x => makeRef(x.m, x.i)));
     ss.answers = {}; ss.graded = false; window.scrollTo(0, 0);
+    if (t.type === 'learn') { ss.qcover = null; syncPracticeSet(t, ss); } else ss.qset = shuffle((ss.qset || []).map(x => makeRef(x.m, x.i)));
   }
   if (r === 'newset') { ss.qset = buildReviewSet(t.topic); ss.answers = {}; ss.graded = false; }
   if (r === 'lang') setLang(b.dataset.k);
@@ -707,7 +770,7 @@ app.addEventListener('submit', e => {
       S.log.push({ date: today, taskId: t.id, topic: t.topic || null, minutes: actual, qc: qc || 0, qt: qt || 0, kind: 'unfinished' });
       keepProgress = true;
     } else {
-      completeTask(t.id, { actual, qc: isMock ? null : qc, qt: isMock ? null : qt, note: (f.get('note') || '').trim(), partial: later });
+      completeTask(t.id, { actual, qc: isMock ? null : qc, qt: isMock ? null : qt, note: (f.get('note') || '').trim(), partial: later, upTo: qc != null && ss.graded ? partCover(t, ss) : null });
     }
     if (isMock) Object.entries(topicScores(roomQuestions(t, ss), ss.answers)).forEach(([c, v]) => S.log.push({ date: today, taskId: t.id, topic: c, minutes: 0, qc: v.c, qt: v.n, kind: 'mock' }));
   }
